@@ -1,0 +1,28 @@
+\section{Related Work / Case Study}
+\label{sec:related}
+
+\subsection{Literature Review: Theoretical Foundations of Network Security Monitoring}
+
+The theoretical foundation of Network Security Monitoring (NSM) rests on the assumption that perimeter defenses will inevitably be breached, necessitating robust internal visibility. Bejtlich (2013) formally defines NSM not merely as the automated detection of malicious activity, but as the rigorous collection, analysis, and escalation of indications and warnings to detect and respond to intrusions. This is corroborated by the National Institute of Standards and Technology (NIST) Special Publication 800-137, which emphasizes that Information Security Continuous Monitoring (ISCM) is required to maintain situational awareness of all networks and dynamically assess threats (Dempsey et al., 2011).
+
+Recent literature highlights a critical shift from relying solely on static Indicators of Compromise (IoCs)---such as known malicious IP addresses or file hashes---to monitoring for dynamic Indicators of Attack (IoAs) via security analytics (Bhatt et al., 2014). Because attackers can trivially alter their infrastructure to evade signature-based detection, modern NSM relies heavily on statistical and behavioral analysis of network flows, packet metadata, and correlated system logs to identify anomalous communication patterns (e.g., unexpected lateral movement or abnormal data exfiltration volumes).
+
+To contextualize the objectives of this project, the following case studies demonstrate the catastrophic consequences of failures within the NSM lifecycle, specifically concerning network visibility and alert triage.
+
+\subsection{Case Study 1: The Equifax Breach (2017) --- Visibility Constraints in Encrypted Traffic}
+\label{sec:equifax}
+
+The 2017 Equifax data breach, which compromised the personal information of 147 million individuals, serves as a primary case study on the limitations of network visibility when dealing with encrypted application-layer traffic.
+
+\textbf{The Incident:} Adversaries breached the Equifax network by exploiting a known vulnerability (CVE-2017-5638) in the Apache Struts web framework portal. Following the initial compromise, the attackers maintained a persistent presence (dwell time) of 76 days. During this period, they executed over 9,000 queries across 51 different databases and exfiltrated massive amounts of data in small, segmented bursts to evade volume-based threshold detection (GAO, 2018).
+
+\textbf{NSM Failure and Analytics Context:} The critical failure in Equifax's monitoring architecture pertained to packet capture and HTTP/HTTPS traffic analysis (as outlined in Section~\ref{sec:pcap}). Equifax possessed an Intrusion Prevention System (IPS) designed to perform deep packet inspection (DPI) on network traffic. However, the SSL/TLS digital certificate required by the appliance to decrypt and inspect encrypted HTTPS network flows had expired 10 months prior to the breach (GAO, 2018).
+
+Consequently, the NSM sensors were ``blind'' to the application-layer payload. The attackers utilized standard encrypted tunnels to exfiltrate the data, which appeared to the monitoring tools as benign HTTPS metadata. The breach was only discovered when Equifax finally updated the expired SSL certificate, restoring visibility. The security appliances immediately identified the anomalous network flows and generated alerts regarding the suspicious outbound traffic, proving that effective security analytics requires unhindered access to high-fidelity network data.
+
+\subsection{Case Study 2: The Target Corporation Breach (2013) --- Alert Fatigue and the NSM Lifecycle}
+\label{sec:target}
+
+While the Equifax breach illustrates a failure in the ``Collection'' phase of the NSM lifecycle, the 2013 Target Corporation breach highlights a critical breakdown in the ``Detection, Decision, and Response'' phases, despite successful data collection.
+
+\textbf{The Incident:} Attackers gained initial access to Target's corporate network by utilizing stolen credentials belonging to a third-party HVAC vendor. From there, they moved laterally through the network, bypassing internal segmentation, to access the Point-of-Sale (POS) systems. The attackers deployed custom malware (``BlackPOS'') to scrape credit card data from system memory and established an internal staging server to periodically exfiltrate the stolen

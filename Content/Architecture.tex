@@ -1,0 +1,129 @@
+\section{Proposed Monitoring Architecture}
+\label{sec:architecture}
+
+This section proposes a network security monitoring (NSM) architecture for a small hypothetical organisation and explains how information flows through it.
+
+\subsection{Scope and Goal}
+
+\subsubsection{Hypothetical Organisation}
+
+XYZ Ltd is a small office in Ho Chi Minh City, Vietnam with about 40 staff. All staff use Windows workstations on a single office LAN. The LAN reaches the internet through one firewall, which also performs NAT. There is no in-house server room: email and documents are provided by cloud services. One IT administrator is responsible for security and acts as the security analyst.
+
+\subsubsection{Goal}
+
+The goal of the architecture is to protect the company's staff, data and business operations by giving continuous visibility of the network, so that attacks are detected early, investigated with reliable evidence and stopped before they cause serious damage.
+
+The architecture is designed to detect the threats most likely to affect a small office:
+
+\begin{table}[htbp]
+  \centering
+  \caption{Threats the architecture is designed to detect, and how each appears on the network.}
+  \label{tab:threats}
+  \footnotesize
+  \begin{tabularx}{\linewidth}{@{}lY@{}}
+    \toprule
+    \textbf{Threat} & \textbf{How it shows up on the network} \\
+    \midrule
+    Phishing and malicious downloads & Visits to newly registered or look-alike domains, executable or script files downloaded over the web \\
+    Malware and remote-access tools & Regular connections from a workstation to the same external server (command-and-control beaconing) \\
+    Ransomware & Contact with known-bad infrastructure before encryption starts, and unusual traffic volumes \\
+    Data theft & Large or long-lasting uploads to unfamiliar external destinations, often outside working hours \\
+    Network scanning and exploitation attempts & Many connections to different ports or hosts in a short time, IDS signature matches \\
+    Policy violations & Unapproved services such as remote-access software, peer-to-peer or anonymising tools \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+To meet this goal, the architecture has four objectives:
+\begin{enumerate}
+  \item \textbf{Visibility:} record every connection between the office network and the Internet, with enough detail to know which host talked to which destination, when, how often, for how long, and how much data was exchanged.
+  \item \textbf{Detection:} raise timely, prioritised alerts for both known threats (signatures, IoCs) and unknown ones (unusual flows, beaconing, rare domains).
+  \item \textbf{Investigation:} let the analyst move from an alert to the related flows, DNS queries and original packets, so that every decision is based on evidence.
+  \item \textbf{Response and improvement:} support containment and recovery, and feed what is learned from each incident back into detection.
+\end{enumerate}
+
+\subsubsection{Scope}
+
+\textbf{Network segments:} the office LAN and its traffic to and from the Internet are in scope. The server VLAN, DMZ and guest Wi-Fi are out of scope.
+
+In this design, we only focus on the data sources that we mention in previous sections, and the others are out of scope.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Data sources in and out of scope.}
+  \label{tab:arch-sources}
+  \footnotesize
+  \begin{tabularx}{\linewidth}{@{}lcY@{}}
+    \toprule
+    \textbf{Data source} & \textbf{In scope} & \textbf{Collected by} \\
+    \midrule
+    Packet captures & Yes & tcpdump on the network sensor \\
+    DNS traffic & Yes & Zeek dns.log \\
+    HTTP/HTTPS traffic & Yes & Zeek http.log and ssl.log (HTTPS as metadata only, no decryption) \\
+    TCP/UDP flows & Yes & Zeek conn.log \\
+    IDS/IPS alerts & Yes & Suricata in passive IDS mode; inline IPS blocking is out of scope \\
+    Firewall logs & Yes & Firewall syslog export \\
+    Authentication logs & No & Out of scope \\
+    Network device logs & No & Out of scope (switch and router logs) \\
+    Endpoint logs & No & Out of scope (no EDR or host agents) \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\subsection{Architecture Diagram}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{monitoring-architecture}
+  \caption{Proposed network security monitoring architecture for a small office. Grey dashed items are out of scope; solid arrows are data flows; dashed arrows are analyst pivots and feedback; numbered circles are the stages of the information flow in Section~\ref{sec:architecture-flow}.}
+  \label{fig:architecture}
+\end{figure}
+
+The architecture has seven layers, read from top to bottom:
+\begin{enumerate}
+  \item \textbf{Traffic sources:} the office LAN, the firewall and the internet. A test access point (TAP) sits on the link between the LAN and the firewall.
+  \item \textbf{Network sensors:} a passive network sensor fed by the TAP (tcpdump, Zeek, Suricata), and the firewall's own logging.
+  \item \textbf{Data sources:} the six in-scope data sources produced by the sensors. The three out-of-scope sources are shown greyed out.
+  \item \textbf{Collection:} the packet store keeps full PCAP; Filebeat ships all logs, flows and alerts to the SIEM.
+  \item \textbf{Analysis engine:} the SIEM runs flow, DNS, HTTP/TLS, signature and correlation analytics.
+  \item \textbf{Alerts and dashboard:} rule matches become security alerts, shown with traffic context on the dashboard.
+  \item \textbf{Response:} the security analyst triages and investigates, then follows the incident-response steps. Lessons learned feed back into the SIEM.
+\end{enumerate}
+
+\subsection{Analysis: Flows, Packets and Signatures Together}
+
+The SIEM combines three kinds of analysis on the same data, matching the detection approaches in Section~\ref{sec:detection}:
+
+\begin{table}[htbp]
+  \centering
+  \caption{Analysis performed by the SIEM.}
+  \label{tab:arch-analysis}
+  \footnotesize
+  \begin{tabularx}{\linewidth}{@{}lYY@{}}
+    \toprule
+    \textbf{Analysis} & \textbf{Data sources} & \textbf{What it detects} \\
+    \midrule
+    Flow analytics & Zeek conn.log, firewall logs & Top talkers, unusual volume, long connections, regular beaconing \\
+    Signatures and IoCs & Suricata alerts, threat-intelligence lists & Known malware traffic, known-bad IP addresses and domains \\
+    DNS analytics & Zeek dns.log & Rare or look-alike domains, connections to IPs never resolved by DNS \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+Flow analysis is cheap and works even when traffic is encrypted, so it runs on everything and is kept for 90 days. Packet capture is expensive, so it is kept for 7 days and used mainly to confirm what the flows and alerts point to.
+
+\subsection{Information Flow and Process}
+\label{sec:architecture-flow}
+
+Information moves through the architecture in eight stages.
+\begin{enumerate}
+  \item \textbf{Capture.} Workstation traffic passes through the TAP on its way to the firewall. The TAP sends an exact copy of every packet to the sensor, and the firewall logs onto each connection it allows or blocks.
+  \item \textbf{Sensing.} On the sensor, tcpdump stores the full packets in the packet store, Zeek turns them into flow records (conn.log) and protocol logs (dns.log, http.log, ssl.log), and Suricata matches them against signatures.
+  \item \textbf{Collection.} Logstash collects the Zeek logs, Suricata alerts and firewall logs, converts them to common field names, and sends them to the SIEM. The raw packets stay on the sensor.
+  \item \textbf{Analysis.} Elasticsearch indexes the events. Detection rules run on them: flow analytics (volume, duration, beaconing), signatures and IoC matches, and DNS analytics.
+  \item \textbf{Security alerts.} Each rule match creates an alert with a severity, the hosts involved and the rule that fired.
+  \item \textbf{Triage.} The analyst reviews the alert on the Kibana dashboard, looks at the same host and time window, and decides whether it is a false positive (close it and note a tuning change) or suspicious (investigate).
+  \item \textbf{Investigation.} The analyst pivots from the alert to the host's flows to see all its connections, to the DNS log to find which domains were looked up, and finally pulls the relevant packets from the packet store to confirm what was transferred.
+\end{enumerate}
+
+Response and feedback. A confirmed incident is recorded as a case and handled in four steps: contain (block the IP addresses and domains at the firewall, disconnect the workstation), eradicate and recover (clean or reimage the host, reset the user's password), and lessons learned. New IoCs and tuned rules

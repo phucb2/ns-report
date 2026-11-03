@@ -1,0 +1,28 @@
+\section{Introduction and Project Objectives}
+\label{sec:introduction}
+
+\textbf{Background.}
+Organisations collect large volumes of network traffic and logs, but this data is only useful when it becomes reliable security evidence. Network Security Monitoring (NSM) is the practice of collecting, analysing and escalating that evidence so that suspicious activity can be detected, investigated and answered.
+
+\textbf{Problem statement.}
+This project asks how network traffic and security data can be analysed to identify suspicious activity and support incident detection. It also asks where indicator-based detection stops working and behavioural analysis has to take over.
+
+\textbf{Project objectives.}
+Over six weeks, the group aimed to:
+\begin{enumerate}
+  \item explain the core NSM concepts and evaluate three data sources: packet captures, DNS traffic and HTTP/HTTPS traffic;
+  \item compare detection approaches and their false-positive and false-negative trade-offs;
+  \item carry out two practical investigations, packet analysis (Option A) and network flow analysis (Option B);
+  \item identify security-relevant activity in the traffic, extract indicators and assess their limits;
+  \item follow one alert through a full investigation, from first signal to a reasoned conclusion and response;
+  \item propose a monitoring architecture for a small organisation.
+\end{enumerate}
+
+\textbf{Project scope.}
+The practical work used two data sets:
+\begin{itemize}
+  \item \textbf{A controlled lab.} We built a network with four containers: a target, an attacker, a benign probe and a packet sniffer. We generated an HTTP flood and a TCP SYN flood against the target, captured the traffic with tcpdump, and compared it with the probe's results, resource measurements and nginx logs.
+  \item \textbf{A public malware capture.} This is the 2025-01-22 malware-traffic-analysis exercise, a 53-minute capture of a Windows domain workstation infected through a fake Google Authenticator download. We analysed it at flow level and request level, without replaying traffic or running any payload.
+\end{itemize}
+
+Across both data sets we identified three security-relevant activities: HTTP flooding, SYN flooding, and command-and-control polling over HTTP. The malware capture also served as the basis for the investigation scenario. Live production networks, endpoint telemetry and TLS decryption were out of scope.

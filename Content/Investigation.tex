@@ -1,0 +1,230 @@
+\section{Security Investigation Scenario}
+\label{sec:investigation}
+
+\subsection{Scenario Setup and Initial Alert}
+
+This investigation focuses on the malware-traffic-analysis exercise from January 22, 2025. Monitoring covers a single 10.1.17.0/24 network segment within the bluemoontuesday.com Active Directory domain (BLUEMOONTUESDAY environment). Key infrastructure on this segment includes the default gateway at 10.1.17.1, the broadcast address at 10.1.17.255, and the domain controller at 10.1.17.2 (WIN-GSH54QLW48D).
+
+The case begins with a person, not a sensor: a coworker reports that a colleague downloaded a suspicious file after searching for Google Authenticator, a lure that matches a campaign published by Unit42 on the same day.
+
+The caller provides some information similar to social media posts at:
+\begin{itemize}
+  \item \url{https://www.linkedin.com/posts/unit42_2025-01-22-wednesday-a-malicious-ad-led-activity-7288213662329192450-ky3V/}
+  \item \url{https://x.com/Unit42_Intel/status/1882448037030584611}
+\end{itemize}
+
+At 19:50 UTC on 22 January 2025 the Tier 1 analyst has 26 alerts queued for the last hour, eight of them QUIC decryption noise, when the report arrives. The first machine-generated signal that matches it is a signature hit:
+
+ET DROP Spamhaus DROP Listed Traffic Inbound --- 10.1.17.215 to 45.125.66.32:2917. Severity medium, first seen 19:59:46 UTC, repeated three times.
+
+Three properties separate it from the other 25: the source is a workstation rather than a server, the destination port is 2917 rather than 80 or 443, and the destination appears on the Spamhaus DROP list. Each is weak on its own. Together they justify five minutes of triage.
+
+The alert is reconstructed. No IDS ran in this lab, so the signature and the queue are representative rather than logged; every value that follows --- addresses, ports, times and volumes --- is measured from the capture.
+
+The capture is 26,759,675 bytes and covers 19:44:56--20:38:18 UTC. It holds full packets for the 10.1.17.0/24 segment and the domain controller 10.1.17.2, and the flow and protocol tables were derived from it with tshark 4.6.9. Endpoint and proxy logs are not available (Table~\ref{tab:evidence-sources}), and that sets the ceiling on what the investigation can prove.
+
+\begin{table}[htbp]
+  \centering
+  \caption{What the analyst has, and what is missing, at the moment of triage.}
+  \label{tab:evidence-sources}
+  \footnotesize
+  \begin{tabularx}{\linewidth}{@{}YcY@{}}
+    \toprule
+    \textbf{Evidence source} & \textbf{Available?} & \textbf{What it provides} \\
+    \midrule
+    Flow records (Zeek conn.log / flow table) & yes & who talked to whom, volume, duration, port \\
+    Packet capture & yes & full payload and timing \\
+    HTTP metadata & yes & URIs, status codes, user agents \\
+    IDS alerts & yes & signature matches, threat-intelligence hits \\
+    DHCP / AD logs (inside capture) & yes & host identity and logged-on user \\
+    Endpoint logs (Sysmon, process creation) & no & would confirm execution directly \\
+    Proxy logs & no & would confirm browsing to the lure \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\subsection{Evidence Collection and Investigation}
+\label{sec:investigation-evidence}
+
+The investigation follows the nine steps the assignment specifies --- initial indicator, available evidence, traffic analysis, related logs, suspicious behaviour, alternative explanations, missing evidence, conclusion and response --- as four moves: identify the host behind the alert, pivot from the single flow to the host's history, reconstruct the sequence backwards from the first suspicious contact, and test the explanations that would make the traffic benign. Each claim is tied to at least two evidence sources, because one log line is a lead, not a finding.
+
+\subsubsection{Host Identification and Traffic Pivoting}
+
+DHCP and Kerberos records turn the address into a machine and a person: DESKTOP-L8C5GSJ, MAC 00:d0:b7:26:4a:74, logged on as shutchenson (Steve Hutchenson). Containment targets that laptop and that account, not an address that DHCP may reassign. Only DHCP and Kerberos logs exist inside the capture; firewall, proxy and endpoint logs were not collected, which is why attribution stops at host and account.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Host and user attribution from the capture.}
+  \label{tab:host-attribution}
+  \begin{tabularx}{\linewidth}{@{}lYY@{}}
+    \toprule
+    \textbf{Field} & \textbf{Value} & \textbf{Source} \\
+    \midrule
+    IP & 10.1.17.215 & every suspicious flow \\
+    MAC & 00:d0:b7:26:4a:74 & Ethernet source, DHCP \\
+    Hostname & DESKTOP-L8C5GSJ & DHCP hostname and FQDN options \\
+    User account & shutchenson & Kerberos CNameString (11 requests) \\
+    Full name & Steve Hutchenson & UTF-16 string in directory traffic \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+The host generates 777 of the capture's 787 flows to 138 external destinations, so the alert is one row in a large history (Section~\ref{sec:flow-analysis}). Three independent rankings narrow it (Table~\ref{tab:rankings}): inbound volume puts 45.125.66.32 first with 9.69 MB in nine flows and 5.252.153.241 second with 6.60 MB in three; port rarity puts 2917 alone, outside any workstation baseline. Two unrelated features converge on the same pair within a minute. That convergence, not any single number, is what justifies escalation.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Three independent rankings pointing at the same destination pair.}
+  \label{tab:rankings}
+  \footnotesize
+  \begin{tabularx}{\linewidth}{@{}lYY@{}}
+    \toprule
+    \textbf{Ranking} & \textbf{Top result} & \textbf{Reading} \\
+    \midrule
+    Largest inbound volume & 45.125.66.32 --- 9.69 MB in, 9 flows & matches the alert \\
+    Second largest & 5.252.153.241 --- 6.60 MB in, 3 flows & unexplained bulk HTTP \\
+    Non-standard port & 2917 only & rare in a workstation baseline \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\subsubsection{Reconstruction of Suspicious Activities}
+
+Working backwards is faster than working forwards: the first contact is easier to recognise than the last. Table~\ref{tab:sequence} reconstructs the sequence from the capture, and Figure~\ref{fig:persistence} shows the moment the implant reports success at creating persistence.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Reconstructed sequence. Each stage is corroborated by at least two evidence sources.}
+  \label{tab:sequence}
+  \scriptsize
+  \setlength{\tabcolsep}{3pt}
+  \begin{tabularx}{\linewidth}{@{}lYY@{}}
+    \toprule
+    \textbf{Time (UTC)} & \textbf{Event} & \textbf{Evidence} \\
+    \midrule
+    19:44:56 & capture begins; host already domain-joined & PCAP \\
+    19:45:34 & DNS and TLS to google-authenticator[.]burleson-appliance[.]net & DNS, TLS SNI \\
+    19:45:35 & DNS and TLS to authenticatoor[.]org; 2.23 MB in 74 s & conn.log, flow table \\
+    19:45:56 & first HTTP request to the stager: \path{/api/file/get-file/264872} (417 B) & frame 5031 \\
+    19:45:58 & \path{29842.ps1} (1,512 B) fetched; polling of \path{/1517096937} begins & frames 5063 to 5071 \\
+    19:47:01 & poll returns a task: TeamViewer 4.38 MB, Resource\_fr, TV, pas.ps1 & frames 8002, 12890, 13643, 13671 \\
+    19:47:05 & client reports ``startup shortcut created; status = success'' & frame 13677, answered 404 \\
+    19:55:07 & TeamViewer registers with master16[.]teamviewer[.]com & 21 requests, DynGate agent \\
+    19:59:38 & reports ``RunRH, status: OK, message: PS process started'' & frame 19292 \\
+    19:59:46 & self-signed TLS to 45.125.66.32:2917; 2.6 MB of payload pulled in the first connection & flow and TLS records \\
+    20:00:13 & self-signed TLS to 45.125.66.252:443, held 1,528 s & flow and TLS records \\
+    20:25:16, 20:28:01 & two further ``PS process started'' reports, each followed by a pull within 8 s & frames 28335, 33356 \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{persistence-report}
+  \caption{The persistence report and its 404 response, with the obfuscated PowerShell loader visible in the same stream view. The implant announces its own success; nothing on the endpoint confirms it.}
+  \label{fig:persistence}
+\end{figure}
+
+The chain is complete: lure, download, stager, tooling, remote access, command and control. Every stage is corroborated by at least two sources. The status messages are the implant reporting its own progress in clear text, which is why persistence and execution are described as self-reported rather than proven.
+
+\subsubsection{Payload and Communication Analysis}
+
+Three of the ten successful responses carried a 354 KB PowerShell agent. Its anatomy is analysed in Section~\ref{sec:c2-payload} and its two builds are hashed there; what the investigation adds is timing --- each agent arrived within seconds of a ``PS process started'' report from the implant, so delivery was driven by the attacker, not by the user.
+
+The largest object is the TeamViewer installer, 4,380,968 bytes, beginning \texttt{4d 5a 90 00}. A second analyst reproduced its hash independently, which is the strongest check available without executing the file.
+
+Both C2 servers used certificates issued hours before first use --- 15:24:47 and 15:42:40 UTC, against connections at 19:59:46 and 20:00:13. The fields and their lifetime are recorded in Section~\ref{sec:c2-payload} and Section~\ref{sec:iocs}; for the investigation they place the build on the day of the attack rather than in a pool of pre-built servers.
+
+\subsubsection{Validation and Differential Diagnosis}
+
+A credible investigation explains the benign traffic as well as the malicious. Four candidates were tested (Table~\ref{tab:differential}). The most instructive is 185.188.32.26: a genuine TeamViewer registration server contacted by a genuine TeamViewer client that the attacker delivered. Its verdict depends on delivery context, not on the destination; the same address would be unremarkable on a managed desktop where TeamViewer was approved.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Differential diagnosis. The TeamViewer case shows that verdicts depend on delivery context, not on the destination alone.}
+  \label{tab:differential}
+  \scriptsize
+  \setlength{\tabcolsep}{3pt}
+  \begin{tabularx}{\linewidth}{@{}YYY@{}}
+    \toprule
+    \textbf{Candidate} & \textbf{Verdict} & \textbf{Reasoning} \\
+    \midrule
+    23.207.166.9:443, 25 flows, 2,714 s & benign & Windows Delivery Optimization; long-lived CDN session, no stager precursor \\
+    185.188.32.26, 10 flows & abused, not attacker-owned & genuine TeamViewer registration server; malicious only because the client was delivered by a stager \\
+    204.79.197.x, 13.107.x & benign & Microsoft update and telemetry ranges, consistent throughout \\
+    8 $\times$ QUIC decryption failures & decoder noise & capture lacks TLS keys; not a security event \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+The same test was applied to the activity itself. A software update would carry an identifying agent and a vendor host; a monitoring agent would follow a fixed schedule rather than 5.3 s with jitter; a user would leave a browser agent and a Referer; a benign long-poll API would return 200 with an empty body rather than 404 for 98 per cent of requests. None of these survives the evidence.
+
+\subsubsection{Detection Gap and Remaining Uncertainty}
+
+The detector stayed quiet for a structural reason. The 594 polls travelled inside three keep-alive connections, so the flow log held three events and the connection-level test had nothing to score (Section 7.2.9). An analyst who trusted only the detector would have closed this case at the first alert.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Residual uncertainty, stated rather than hidden.}
+  \label{tab:gaps}
+  \footnotesize
+  \begin{tabularx}{\linewidth}{@{}YYY@{}}
+    \toprule
+    \textbf{Gap} & \textbf{Why it matters} & \textbf{How to close it} \\
+    \midrule
+    No process-creation logs & execution is inferred from self-reports & Sysmon Event ID 1 on the host \\
+    Hashes not checked externally & family attribution & VirusTotal or MalwareBazaar lookup \\
+    No proxy or DNS logs & confirm the browsing path to the lure & proxy logs for 19:45 \\
+    TLS payload not decrypted & the 2.6 MB pulls remain opaque & hash files from the endpoint after containment \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+Each gap has a specific way to close it, and none of them changes the verdict on the host.
+
+\subsection{Investigation Conclusion and Response}
+
+DESKTOP-L8C5GSJ (10.1.17.215, user shutchenson) was compromised through a fake Google Authenticator download at 19:45:34 UTC. The installer launched a VBScript that started hidden PowerShell, which fetched a stager from 5.252.153.241 and polled it 594 times for tasks. The attacker delivered TeamViewer for remote access and pushed at least three further PowerShell payloads over self-signed TLS to 45.125.66.32:2917 and 45.125.66.252:443. Persistence through a Startup-folder shortcut (TeamViewer.lnk) is self-reported.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Confidence per claim. Stating confidence is part of the finding, not a hedge.}
+  \label{tab:confidence}
+  \footnotesize
+  \begin{tabularx}{\linewidth}{@{}YlY@{}}
+    \toprule
+    \textbf{Claim} & \textbf{Confidence} & \textbf{Basis} \\
+    \midrule
+    Host compromised and C2 established & high & multiple independent evidence sources \\
+    Tooling and payloads delivered & high & sizes, content types and hashes \\
+    Persistence created & medium & attacker's own status message only \\
+    PowerShell execution succeeded & medium & self-reported; no endpoint telemetry \\
+    Data exfiltration occurred & not established & no evidence of outbound bulk transfer \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+Response follows the four phases of NIST SP 800-61 Rev.\ 2 (Table~\ref{tab:response}). Containment comes before eradication, and preservation comes before both: the laptop is isolated through EDR but not powered off, the four C2 addresses and the two lure domains are blocked, and egress on 2917 is closed.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Response actions by NIST phase.}
+  \label{tab:response}
+  \footnotesize
+  \begin{tabularx}{\linewidth}{@{}lY@{}}
+    \toprule
+    \textbf{Phase} & \textbf{Action} \\
+    \midrule
+    Containment & isolate the laptop through EDR; do not power it off, to preserve volatile state \\
+    Containment & block 5.252.153.241, 45.125.66.32, 45.125.66.252, 82.221.136.26, both fake domains, and egress port 2917 \\
+    Eradication & reimage rather than clean; remove TeamViewer and the Startup shortcut \\
+    Eradication & reset the shutchenson credentials and revoke sessions and tokens \\
+    Recovery & restore from a known-good image and re-add to the domain under monitoring \\
+    Investigation & hunt the same indicators on all hosts, especially the domain controller 10.1.17.2 \\
+    Investigation & determine whether the 2.6 MB payloads reached disk; hash from the endpoint \\
+    Lessons learned & add alerts for bare-IP HTTP, request-level polling, and self-signed TLS on odd ports from workstations \\
+    Evidence & preserve the PCAP and computed hashes with chain of custody \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+Response must not stop at indicators. The infrastructure is cheap to change; the durable lessons are behavioural: HTTP to a raw IP, 404-dominated polling, self-signed TLS on odd ports, and remote-access tooling installed outside software management.

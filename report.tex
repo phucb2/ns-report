@@ -1,0 +1,80 @@
+\documentclass[twoside]{hcmut-report}
+
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{array,tabularx,longtable,listings}
+\usepackage[nameinlink]{cleveref}
+
+% Ragged table cells that still hyphenate long words.
+\makeatletter
+\newcommand{\colragged}{%
+  \let\\\@centercr
+  \rightskip=0pt plus 1fil
+  \leftskip=0pt
+  \parindent=0pt
+  \parfillskip=0pt
+  \hyphenpenalty=50
+  \exhyphenpenalty=50
+  \pretolerance=100
+  \tolerance=400
+  \emergencystretch=2em
+  \relax}
+\g@addto@macro\UrlBreaks{%
+  \do\a\do\b\do\c\do\d\do\e\do\f\do\g\do\h\do\i\do\j\do\k\do\l\do\m%
+  \do\n\do\o\do\p\do\q\do\r\do\s\do\t\do\u\do\v\do\w\do\x\do\y\do\z%
+  \do\A\do\B\do\C\do\D\do\E\do\F\do\G\do\H\do\I\do\J\do\K\do\L\do\M%
+  \do\N\do\O\do\P\do\Q\do\R\do\S\do\T\do\U\do\V\do\W\do\X\do\Y\do\Z%
+  \do\0\do\1\do\2\do\3\do\4\do\5\do\6\do\7\do\8\do\9}
+\def\UrlFont{\fontencoding{OT1}\ttfamily}
+\makeatother
+\Urlmuskip=0mu plus 1mu\relax
+\newcolumntype{Y}{>{\colragged\arraybackslash}X}
+
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  frame=single,
+  backgroundcolor=\color{gray!8},
+  xleftmargin=1em,
+  framexleftmargin=0.5em
+}
+
+\coursename{Network Security}
+\reporttype{Assignment Report}
+\title{Network Security Monitoring and Security Analytics}
+\advisor{& Nguyen Duc Thai &}
+\stuname{%
+  & Nguyễn Thanh Thảo & 2570758 \\
+  & Nguyễn Đình Phú & 2470891 \\
+  & Bùi Bá Phúc & 2570799 \\
+}
+
+\setcounter{secnumdepth}{3}
+\setcounter{tocdepth}{3}
+
+\begin{document}
+\coverpage
+
+\tableofcontents
+
+\include{Content/Introduction}
+\include{Content/Fundamentals}
+\include{Content/DataSources}
+\include{Content/Detection}
+\include{Content/RelatedWork}
+\include{Content/Laboratory}
+\include{Content/Methodology}
+\include{Content/TrafficAnalysis}
+\include{Content/Investigation}
+\include{Content/Results}
+\include{Content/Discussion}
+\include{Content/Architecture}
+\include{Content/Conclusion}
+\include{Content/References}
+\appendix
+\include{Content/Appendix}
+
+\end{document}

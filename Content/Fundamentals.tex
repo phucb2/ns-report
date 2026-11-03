@@ -1,0 +1,87 @@
+\section{Network Security Monitoring Fundamentals}
+\label{sec:fundamentals}
+
+\subsection{Overview}
+\label{sec:overview}
+
+Network Security Monitoring (NSM) is the practice of collecting, analyzing, and escalating network-based evidence so that analysts can detect and investigate suspicious activity. Its value does not come from storing packets and logs. It comes from turning that data into reliable security evidence that supports detection, investigation, and incident response.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{nsm-process}
+  \caption{The security monitoring process.}
+  \label{fig:nsm-process}
+\end{figure}
+
+Figure~\ref{fig:nsm-process} shows the security monitoring process.
+
+\subsection{Core Concepts}
+\label{sec:core-concepts}
+
+\subsubsection{Network Traffic Monitoring}
+
+Network traffic monitoring is the observation of traffic crossing a network. It can serve operations (capacity, availability) or security (detecting threats). Traffic is usually observed at a choke point such as a switch SPAN port, a network TAP, or a virtual switch in a lab. In this project it is used for security purposes: identifying who talks to whom, how often, over which protocols, and whether this matches expected behavior.
+
+\subsubsection{Packet Capture (PCAP)}
+
+Packet capture records individual packets, including headers and, if available, payload.
+\begin{itemize}
+  \item \textbf{Provides:} source/destination IP, ports, protocol, TCP flags, DNS query names, HTTP requests, timing.
+  \item \textbf{Strength:} the most detailed evidence; allows reconstruction of a conversation.
+  \item \textbf{Limitations:} large storage cost; encrypted payload (TLS) is not readable; capturing user traffic raises privacy concerns.
+  \item \textbf{Tools:} tcpdump, Wireshark.
+\end{itemize}
+
+\subsubsection{Network Flows}
+
+A flow summarizes a conversation between two endpoints over a period, typically by its 5-tuple (source IP, destination IP, source port, destination port, protocol) plus start time, duration, and byte/packet counts.
+\begin{itemize}
+  \item \textbf{Strength:} compact, scalable, works even when payload is encrypted.
+  \item \textbf{Limitation:} no content, so it shows \emph{that} communication happened, not \emph{what} was said.
+  \item \textbf{Example:} one source contacting 200 different ports on one host within seconds suggests scanning.
+\end{itemize}
+
+\subsubsection{Metadata}
+
+Metadata is structured information extracted from traffic that describes it without storing the whole content, such as DNS queries and answers, HTTP host and user agent, TLS server name (SNI), and certificate details. Zeek is a network analysis tool that produces this kind of metadata as structured logs (e.g., conn.log, dns.log, http.log) and links them with a connection identifier (uid), which makes pivoting between logs possible. Metadata sits between flows and full packets: richer than flows, far smaller than PCAP.
+
+\subsubsection{Logs}
+
+Logs are records of events produced by systems and applications, such as firewalls, DNS servers, authentication services, IDS/IPS, network devices, and endpoints. NIST SP 800-92 describes log management as the processes of generating, transmitting, storing, analyzing, and disposing of log data. Logs show \emph{what a system did or decided} (e.g., ``login failed'', ``connection blocked''), which complements what the network shows. Their reliability depends on accurate timestamps, adequate retention, and protection from tampering.
+
+\subsubsection{Security Events}
+
+A security event is any observable occurrence relevant to security, whether benign or malicious: a failed login, a blocked connection, an NXDOMAIN response, a port being probed. Most events are harmless on their own. Events are the raw material from which alerts and incidents are built.
+
+\subsubsection{Indicators of Compromise (IoC)}
+
+IoCs are artifacts that suggest a system may already be compromised or has interacted with known malicious infrastructure. Network-related examples are IP addresses, domain names, URLs, file hashes, unusual ports, and suspicious DNS requests.
+\begin{itemize}
+  \item \textbf{Use:} fast matching of traffic and logs against known-bad lists.
+  \item \textbf{Weakness:} they describe what was already seen; attackers can change IPs, domains, and hashes cheaply, so IoC matching misses new variants.
+\end{itemize}
+
+\subsubsection{Indicators of Attack (IoA)}
+
+IoAs describe the \emph{behavior or technique} of an attack in progress, regardless of the specific infrastructure used. Examples are port scanning, repeated authentication failures, periodic beacon-like connections, and bursts of failed DNS lookups.
+\begin{itemize}
+  \item \textbf{Use:} detecting unknown or modified attacks by their behavior.
+  \item \textbf{Weakness:} more false positives, because legitimate tools can behave similarly (e.g., an authorized vulnerability scanner).
+\end{itemize}
+
+\subsubsection{Security Alerts}
+
+An alert is a notification generated when data matches a signature, rule, threshold, or analytic. An alert is a \emph{hypothesis that needs triage}, not a confirmed incident. Poorly tuned detection produces false positives and alert fatigue; missing coverage produces false negatives (discussed in Section~\ref{sec:discussion}).
+
+\subsubsection{Security Analytics}
+
+Security analytics applies methods such as rules, thresholds, statistical analysis, baselining, anomaly detection, behavioral analysis, correlation, and threat intelligence to security data in order to find suspicious behavior and support decisions. Correlation is especially important: combining DNS, flow, packet, and authentication evidence gives higher confidence than any single source (detailed in Section~\ref{sec:detection}).
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{data-to-response}
+  \caption{How raw network data becomes a security response.}
+  \label{fig:data-to-response}
+\end{figure}
+
+Figure~\ref{fig:data-to-response} shows how raw network data becomes a security response.

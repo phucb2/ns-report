@@ -1,0 +1,83 @@
+\section{Laboratory Details}
+\label{sec:appendix}
+
+\subsection{Generated-Traffic Lab}
+
+\begin{table}[htbp]
+  \centering
+  \caption{Components of the generated-traffic lab.}
+  \label{tab:lab-components}
+  \footnotesize
+  \begin{tabularx}{\linewidth}{@{}llY@{}}
+    \toprule
+    \textbf{Component} & \textbf{Address} & \textbf{Role} \\
+    \midrule
+    Target & 172.28.0.10 & nginx web server in front of a Python application \\
+    Attacker & 172.28.0.20 & Generates the HTTP flood and the SYN flood \\
+    Benign probe & 172.28.0.30 & Requests the page continuously to measure availability and latency \\
+    Sniffer & Shares the target's network namespace & Captures all traffic on the target's interface \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+nginx served \path{/heartbeat} as a static file and forwarded \path{/} and \path{/index.html} to a local Python application. Each page request read and sorted a 5,000-row catalogue before responding, giving a repeatable workload. A local health check ran every two seconds; it appeared in the nginx logs but not in the capture.
+
+The target was limited to half a CPU core and 64 MiB of memory, inside a virtual machine with two vCPUs, about 3.7 GiB of memory and no swap. The other containers had no resource limits. SYN cookies were disabled on the target.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Tools used in the generated-traffic lab.}
+  \label{tab:lab-tools}
+  \begin{tabularx}{\linewidth}{@{}lY@{}}
+    \toprule
+    \textbf{Tool} & \textbf{Purpose} \\
+    \midrule
+    nginx and Python & Web server and application workload on the target \\
+    hey & HTTP flood generation \\
+    ZMap & SYN flood generation \\
+    curl & Benign probe requests and latency measurement \\
+    tcpdump & Packet capture on the target's interface \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\subsection{Real-Traffic Lab}
+
+\begin{table}[htbp]
+  \centering
+  \caption{Real-traffic dataset.}
+  \label{tab:real-dataset}
+  \footnotesize
+  \begin{tabularx}{\linewidth}{@{}lY@{}}
+    \toprule
+    \textbf{Item} & \textbf{Value} \\
+    \midrule
+    File & \path{2025-01-22-traffic-analysis-exercise.pcap} \\
+    Size & 26,759,675 bytes; 39,427 packets; 19:44:56 to 20:38:18 UTC \\
+    SHA-256 & \texttt{\footnotesize e59db1c07c6fdefafa0abdbca03248c341cdc36c09c34753204d3162802a3586} \\
+    Scenario & A user in an Active Directory network searched for Google Authenticator, downloaded a fake installer and the host then contacted attacker infrastructure \\
+    Network & 10.1.17.0/24, domain bluemoontuesday.com, domain controller 10.1.17.2 \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+The Docker Compose stack ran on a single host with four CPUs and 6 GB of memory.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Components of the real-traffic lab.}
+  \label{tab:real-components}
+  \footnotesize
+  \begin{tabularx}{\linewidth}{@{}lY@{}}
+    \toprule
+    \textbf{Component} & \textbf{Role} \\
+    \midrule
+    Zeek & Converts packets into connection, DNS, HTTP, TLS, certificate and file logs \\
+    Suricata & Matches packets against ET Open and the group's local rules \\
+    Filebeat & Ships Zeek and Suricata logs into Elasticsearch in a common schema \\
+    Elasticsearch and Kibana & Store and search events; host the security dashboard \\
+    Flow-statistics script & Scores beaconing and HTTP request rhythm from the Zeek logs \\
+    tshark, Wireshark and Python & Packet inspection and the independent flow table \\
+    \bottomrule
+  \end{tabularx}
+\end{table}

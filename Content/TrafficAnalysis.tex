@@ -1,0 +1,233 @@
+\section{Network Traffic Log Analysis}
+\label{sec:traffic}
+
+\subsection{HTTP Flooding}
+\label{sec:http-flood}
+
+\subsubsection{Observed Pattern}
+
+The baseline interval contained 32 probe requests, each using a separate TCP connection. Median SYN-to-SYN/ACK time was 33 $\mu$s, while median request-to-first-response-byte time was 11.2 ms, with a 95th percentile of 15.8 ms. These exchanges provided a reference for normal communication within the captured laboratory network.
+
+A subsequent interval contained 1,722 HTTP requests from the attacker to the victim over approximately 20 seconds. The requests repeatedly targeted \path{/}, with observed rates between 74 and 94 requests/s. Each request used a new TCP connection, producing repeated handshake--request--response exchanges concentrated on the same service.
+
+The packet sequence showed that the victim continued to answer SYN packets promptly. Median SYN-to-SYN/ACK time was 3 $\mu$s, indicating that connection establishment was not the main source of delay during this interval.
+
+\subsubsection{Response Timing and Service Impact}
+
+The delay appeared after the HTTP request. Median request-to-first-response-byte time increased to 217.5 ms, compared with 11.2 ms at baseline. The 95th percentile reached 303 ms, and the maximum reached 400 ms.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Packet-based timing of the HTTP flood against the baseline.}
+  \label{tab:http-timing}
+  \footnotesize
+  \begin{tabularx}{\linewidth}{@{}Ycc@{}}
+    \toprule
+    \textbf{Packet-based measurement} & \textbf{Baseline} & \textbf{HTTP flood} \\
+    \midrule
+    Median SYN-to-SYN/ACK time & 33 $\mu$s & 3 $\mu$s \\
+    Median request-to-first-response-byte time & 11.2 ms & 217.5 ms \\
+    95th-percentile request-to-first-response-byte time & 15.8 ms & 303 ms \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+The timing separates fast TCP establishment from slower application responses. It supports a finding of degraded HTTP responsiveness, but the PCAP alone cannot determine whether the delay occurred in nginx, the upstream application, or scheduling and queueing between them.
+
+\subsubsection{Connection Closure and Assessment}
+
+Among 1,710 connections examined for closure, the victim sent the first FIN on 924 connections, approximately 54\%. This distinguishes the interval from baseline, where the probe initiated closure on all 32 examined connections.
+
+The repeated requests, concentrated connection activity, and increased response delay are consistent with HTTP flooding in the known laboratory scenario. The evidence demonstrates service degradation rather than complete unavailability.
+
+\subsection{TCP SYN Flooding}
+\label{sec:syn-flood}
+
+\subsubsection{Observed Pattern}
+
+The capture contained approximately 100,000 attacker SYN packets sharing a consistent TCP pattern: window size 65,535, a Maximum Segment Size option of 1,460 bytes, and no TCP timestamp option. The packets targeted the victim's port 80 and used 54,195 distinct source ports.
+
+To separate this activity from earlier HTTP connections, the analysis examined 52,485 source ports not previously used during the HTTP interval. Only 1,062 of these ports received at least one SYN/ACK; no SYN/ACK was observed for the remaining 51,423 ports. No completed attacker handshake was identified in the flood traffic.
+
+These counts describe distinct source ports, not individual packet response rates: repeated SYNs using the same port must not be counted as separate connections without further sequence-level analysis.
+
+\subsubsection{Incomplete Handshakes}
+
+For answered attempts, the victim sent SYN/ACK packets without receiving the final ACK. It subsequently retransmitted SYN/ACK packets, showing that connection establishment remained incomplete.
+
+For example, the connection associated with attacker source port 45733 received SYN/ACK packets at approximately 282.99 s, 284.03 s, 286.08 s, 290.11 s, 298.18 s, 314.56 s.
+
+The successive intervals increased from approximately one second to sixteen seconds. This sequence provides packet-level evidence of repeated attempts to complete the same pending handshake.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.75\linewidth]{incomplete-handshake}
+  \caption{Representative incomplete handshake during the SYN-flood interval.}
+  \label{fig:incomplete-handshake}
+\end{figure}
+
+\subsubsection{Effect on Legitimate Connections}
+
+The same interval affected probe traffic from 172.28.0.30. Seven of ten probe connections received no SYN/ACK in the capture. Retransmitted probe SYNs were observed after approximately 1.02 seconds, without a completed handshake for those attempts.
+
+The three successful probe connections had a median request-to-first-response-byte time of 8.8 ms. Thus, the principal observed failure was connection establishment, not delayed HTTP processing after a successful handshake.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.75\linewidth]{failed-probe}
+  \caption{Failed probe connection observed during SYN flooding.}
+  \label{fig:failed-probe}
+\end{figure}
+
+\subsubsection{Late Resets and Continuing Retransmissions}
+
+SYN/ACK retransmissions continued after the final attacker SYN. This exchange shows that some pending attempts were explicitly reset rather than completing normally. Continuing SYN/ACK retransmissions also demonstrate that stopping new SYN traffic did not immediately end all connection-related activity. Exact pending-state counts require socket measurements and cannot be obtained from the PCAP alone.
+
+The combination of concentrated SYN traffic, absent final ACKs, repeated SYN/ACK transmissions, and failed legitimate handshakes is consistent with SYN flooding. Unlike the HTTP activity, where the victim established connections but responded slowly, this activity prevented several sampled clients from reaching the HTTP exchange.
+
+\subsection{Command and Control Activities}
+\label{sec:c2}
+
+\subsubsection{Observed HTTP Activity}
+
+Between 19:45:56 and 20:38:18 UTC, the workstation 10.1.17.215 sent 594 HTTP requests to a single bare IP address, 5.252.153.241, on the URI \path{/1517096937}. No request carried a Referer or a cookie, and 593 of the 594 carried no User-Agent at all. The responses were almost entirely negative: 584 were 404 and 10 were 200. The ten successful responses were the only content the server ever returned. All 594 requests travelled inside three TCP connections, the longest held open for 43 minutes. Section~\ref{sec:investigation} places this channel in the wider intrusion.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Polling measurements for 10.1.17.215 $\rightarrow$ 5.252.153.241. The connection count is why a flow log holds three events for this channel (Section~\ref{sec:flow-analysis}).}
+  \label{tab:poll-measurements}
+  \begin{tabularx}{\linewidth}{@{}YY@{}}
+    \toprule
+    \textbf{Measure} & \textbf{Value} \\
+    \midrule
+    Requests to \path{/1517096937} & 594 \\
+    Responses & 584 $\times$ 404, 10 $\times$ 200 \\
+    Mean inter-request gap & 5.30 s \\
+    Coefficient of variation & 0.675 \\
+    Observation window & 19:45:56--20:38:18 UTC (3,142 s) \\
+    Requests with no User-Agent & 593 of 594 \\
+    TCP connections used & 3 (keep-alive, longest 2,592 s) \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{polling-requests}
+  \caption{Request and 404 response pairs on the polling URI, roughly five seconds apart. The client keeps asking after 584 negative answers, which is task-queue polling rather than browsing.}
+  \label{fig:polling}
+\end{figure}
+
+\subsubsection{Analysis of HTTP Behaviour}
+
+Three properties make the traffic automated rather than human. The spacing is regular: a mean gap of 5.30 s with a coefficient of variation of 0.675 across 3,142 s, sustained for 52 minutes with no pause for idle time, a meeting or a closed lid. The volume is far above browsing: a user produces tens of requests per page, not 594 to one URI. And the client ignores the answer: a browser that receives 404 stops, while this one continued and only changed behaviour when a 200 arrived. That is task-queue behaviour --- ask, be told there is nothing, ask again.
+
+The missing User-Agent points the same way. Legitimate software identifies itself; 593 requests did not. The single exception, the .NET WebClient default string, is itself a fingerprint: it is what a scripting library sends, not what a browser sends.
+
+\subsubsection{Detection Significance}
+\label{sec:c2-detection}
+
+The activity is obvious in HTTP metadata and nearly invisible in flow records. Because the 594 requests reused three keep-alive connections, a flow log contains three events, and a connection-level regularity test has nothing to measure; Section~\ref{sec:beacon} traces that failure across the full threshold range. Detection has to run at request level: count transactions per host and URI, measure their spacing, and read the response-code mix. The rule needs no signature --- more than 100 requests to one destination in an hour, a coefficient of variation below 0.75 and a 404 share above 90 per cent would have surfaced this host.
+
+The indicators have limits. A legitimate long-poll API, an update checker or a misconfigured monitoring agent can produce the same shape, so the pattern ranks a host for review rather than proving compromise. A C2 that uses TLS with no HTTP layer produces no request-level telemetry at all. And part of the evidence here exists only because this malware reported its own progress in clear text inside the URI. The behaviour generalises better than the strings.
+
+\subsubsection{Payload and Infrastructure Behind the Channel}
+\label{sec:c2-payload}
+
+The ten successful responses were the only content the channel ever returned, and three of them carried a 354 KB PowerShell agent: frames 19290 and 28332 carry one build, frame 33354 a second. Each is a 36-line script with a Send-Log function, a WebClient-based DownloadString, Convert.FromBase64String and Start-Process, one injected base64 blob and no static URL. Because the endpoints are assembled at runtime, the file itself names no infrastructure; the network record does (Table~\ref{tab:payload-objects}).
+
+\begin{table}[htbp]
+  \centering
+  \caption{Objects returned by the polling channel. Two responses carry the same build; the third differs, so the agent was rebuilt between tasks rather than reused.}
+  \label{tab:payload-objects}
+  \footnotesize
+  \begin{tabularx}{\linewidth}{@{}rrYY@{}}
+    \toprule
+    \textbf{Frame} & \textbf{Bytes} & \textbf{SHA-256} & \textbf{Notes} \\
+    \midrule
+    19290 & 354,353 & \texttt{1f7d3916...5c0c55bc} & 36-line PowerShell agent \\
+    28332 & 354,353 & \texttt{1f7d3916...5c0c55bc} & identical build, delivered again \\
+    33354 & 354,301 & \texttt{d63f0163...3704bc} & same pattern, different build \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+The infrastructure behind the channel was built for this operation. Both servers presented self-signed certificates with the IP address as the common name and placeholder fields (C=XX, L=N/A), issued at 15:24:47 and 15:42:40 UTC on 22 January --- four and a half hours before the first connection at 19:59:46. There is no domain to blocklist, no certificate authority to revoke, and nothing in the certificate that predates the campaign; the fields are recorded with the other indicators in Appendix B. An indicator list built the day before would have matched none of it.
+
+That is the practical lesson of this channel: its durable features are behavioural --- a bare IP, a numeric URI, 404-dominated polling, agents rebuilt per task --- while its addressable features last hours to days. Blocking the address stops this build; detecting the polling pattern stops the next one.
+
+\subsection{Indicators of Compromise (IoCs)}
+\label{sec:iocs}
+
+\subsubsection{HTTP Flood Indicators}
+
+The capture identified repeated HTTP requests from attacker 172.28.0.20 to victim 172.28.0.10:80, primarily targeting \path{/}. Moreover, approximately 1,722 requests appeared within 20 seconds, each using a new TCP connection. Additionally, median request-to-first-response-byte time increased from 11.2 ms at baseline to 217.5 ms, while TCP handshakes remained fast. The combination of concentrated requests and delayed responses provided stronger evidence of service degradation than request volume alone.
+
+For monitoring, these observations support correlating request frequency, repeated endpoint access, connection activity, and response timing. The attacker address and URI can help locate related traffic, but they are not independently malicious IoCs. Authorized load testing or legitimate demand could produce similar patterns and this shows the limitation of the indicators. Therefore, behavioral analysis and contextual evidence are necessary.
+
+\subsubsection{SYN Flood Indicators}
+
+The capture identified concentrated SYN traffic from attacker 172.28.0.20 to victim port 80, without completed attacker handshakes. After that, the SYN packets shared a TCP window of 65,535, an MSS option of 1,460 bytes, and no timestamp option which made them suspicious. Besides, repeated victim SYN/ACK transmissions showed unresolved connection attempts. These indicators affect seven of ten sampled probe connections, linking the suspicious activity to failures affecting legitimate clients.
+
+For monitoring, these indicators support examining incomplete handshakes, SYN/ACK retransmissions, and legitimate connection failures together. The TCP-option pattern helps group packets within this capture, but it is not a universal attack signature. High SYN counts or missing responses alone are insufficient to establish an attack because retransmissions, network conditions, or capture gaps may produce similar observations. The combined evidence supports SYN-flood-related disruption, not proof of victim compromise.
+
+\subsubsection{Malware}
+
+An indicator is a fact about an intrusion that can be matched cheaply: an address, a domain, a URI, a hash, a certificate field. This section lists the indicators this capture actually produced, how each one was obtained, and where indicator matching stops being useful. Nothing below came from a threat-intelligence feed; every value was read from the capture, which is also the test of what a SOC could have extracted on the day.
+
+\subsubsection{Indicators Extracted from This Capture}
+
+Indicators were derived along four paths, and the path determines how long the result stays useful. Names came from DNS queries and TLS server names; addresses, ports and volumes came from the flow table; URIs and response codes came from HTTP transaction metadata; file hashes were computed in memory from the transferred bytes; and certificate fields came from the TLS handshake. Table~\ref{tab:iocs} lists the result with the evidence behind it.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Indicators from this capture, how each was obtained, and the lifetime a SOC should assume. Values are defanged; full hashes are in Appendix B.}
+  \label{tab:iocs}
+  \scriptsize
+  \setlength{\tabcolsep}{3pt}
+  \begin{tabularx}{\linewidth}{@{}lYYY@{}}
+    \toprule
+    \textbf{Type} & \textbf{Indicator} & \textbf{Evidence (how obtained)} & \textbf{Operational use and lifetime} \\
+    \midrule
+    Domain & google-authenticator[.]burleson-appliance[.]net; authenticatoor[.]org
+      & DNS query and TLS SNI, 19:45:34 and 19:45:35
+      & DNS sinkhole or proxy deny-list; hours to days \\
+    IP & 5[.]252[.]153[.]241
+      & 594 HTTP requests, 584 $\times$ 404 (flow table and HTTP metadata)
+      & Egress block or IDS match; hours \\
+    IP:port & 45[.]125[.]66[.]32:2917
+      & 9 TLS flows, 9.69 MB received, no SNI (flow table and TLS handshake)
+      & Egress deny above 80/443; days \\
+    IP & 45[.]125[.]66[.]252
+      & 3 long-lived TLS flows, one held for 38 minutes
+      & Egress block; hours \\
+    URI & \path{/1517096937}
+      & 594 polls, 584 $\times$ 404 (HTTP metadata)
+      & Proxy rule and retro-hunt; weeks \\
+    URI & \path{/api/file/get-file/*.ps1}
+      & two script downloads, 1,512 and 1,553 bytes
+      & Proxy or WAF rule; weeks \\
+    Hash & \texttt{1f7d3916...5c0c55bc}; \texttt{d63f0163...3704bc}
+      & SHA-256, computed from the wire, frames 19290, 28332 and 33354
+      & EDR block and retro-hunt; permanent per build \\
+    Certificate & CN = IP address, C = XX, L = N/A, self-signed
+      & TLS handshake, notBefore 15:24:47 and 15:42:40 UTC
+      & TLS fingerprint or JA3S; days \\
+    Port & 2917/TCP
+      & outside the common 80/443 baseline (flow table)
+      & Egress policy; durable locally \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+Two addresses in this intrusion are not indicators. 104[.]21[.]64[.]1 is a Cloudflare address that fronted the fake download page, and 185[.]188[.]32[.]26 is genuine TeamViewer infrastructure that the attacker merely used. Blocking either would break unrelated services, so both are evidence of the intrusion but not safe rules. Ownership has to be checked before a match becomes a block.
+
+No authentication-failure indicator exists in this capture. Kerberos and LDAP completed normally throughout, and no connection ended in an unanswered SYN; reporting brute-force logons or scanning here would be invention rather than analysis.
+
+\subsubsection{Limits of Indicator-Based Detection}
+
+Indicators describe infrastructure that existed at the moment of extraction. Both C2 certificates were minted at 15:24:47 and 15:42:40 UTC and first used at 19:59:46 and 20:00:13 --- four to four and a half hours of life before contact. Three payloads arrived in two builds, so the hash changed between tasks. A rule written from yesterday's list would have matched none of this, and a rule written from today's covers only this operation.
+
+Content indicators fail under encryption. Both C2 channels used TLS, so no URI, file name or payload was visible; what survived was the certificate, the byte volume, the duration and the timing. A channel that never speaks HTTP leaves no request-level telemetry at all, which is the false-negative class named in Section~\ref{sec:c2-detection}.
+
+The indicator that actually surfaced the compromised host was not an external one. Port 2917 sits outside the common 80/443 baseline, and top-inbound-volume ranked three malicious pairs, while the timing rule produced no true positive at any threshold (Section 7.2.9). The durable signal was derived from the local environment, not from the attacker's infrastructure. Indicators answer whether this exact artefact has been seen before; at 19:45:34 the question was whether this host was doing something it had never done (Section~\ref{sec:indicators-vs-behaviour}). Indicator matching is the cheapest first layer, not a detection strategy on its own.

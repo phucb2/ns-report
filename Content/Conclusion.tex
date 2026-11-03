@@ -1,0 +1,29 @@
+\section{Conclusion}
+\label{sec:conclusion}
+
+This project analysed two data sets, a lab with HTTP and SYN floods and a public capture of an infected Windows workstation, and took both through the complete security-monitoring process (Table~\ref{tab:nsm-process}).
+
+\begin{table}[htbp]
+  \centering
+  \caption{The security-monitoring process applied in this project.}
+  \label{tab:nsm-process}
+  \footnotesize
+  \begin{tabularx}{\linewidth}{@{}lY@{}}
+    \toprule
+    \textbf{Stage} & \textbf{What the project did} \\
+    \midrule
+    Network data & Captured lab traffic; a 53-minute malware capture, hashed before use \\
+    Collection & Zeek and Suricata logs loaded into Elasticsearch and Kibana; probe, resource and nginx data for the lab \\
+    Analysis & Packet timing, flow and request-level analysis, security dashboard \\
+    Security indicator & Request floods and half-open handshakes; bare-IP polling every 5.3 s, self-signed TLS on port 2917 \\
+    Investigation & Host DESKTOP-L8C5GSJ and user shutchenson identified; infection chain reconstructed \\
+    Detection & Indicators turned into rules; tuning cut alerts from 619 to 18 \\
+    Decision & Compromise confirmed with high confidence; floods caused degradation, not compromise \\
+    Response & Isolate and reimage the host, block C2 infrastructure, feed new rules back \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+Three lessons stand out. Suspicious behaviour was recognised by combinations of features judged against the host's role, not by a single threshold. Every finding needed a second, independent source before it was accepted. And indicators were short-lived, because the C2 servers were set up hours before use, so behavioural rules such as request-level polling detection gave the durable results.
+
+Network security monitoring is therefore not the collection of packets and logs. Its value comes from turning that data into reliable security evidence that supports detection, investigation and incident response.

@@ -1,0 +1,282 @@
+\section{Experimental Results}
+\label{sec:results}
+
+\subsection{HTTP and SYN Flooding}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{victim-cpu}
+  \caption{Victim CPU utilization across experimental phases.}
+  \label{fig:victim-cpu}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{victim-memory}
+  \caption{Victim memory usage across experimental phases.}
+  \label{fig:victim-memory}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{probe-response-times}
+  \caption{Benign probe response times and timeout events.}
+  \label{fig:probe-times}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{nginx-access-log}
+  \caption{Nginx access-log entries per second by client.}
+  \label{fig:nginx-rate}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{tcp-connection-states}
+  \caption{Victim TCP connection states on port 80.}
+  \label{fig:tcp-states}
+\end{figure}
+
+\subsection{Dashboard Monitoring Results}
+
+The dashboard was read over the full capture window (19:44 to 20:39 UTC) in the order an analyst would use it: alerts first, then the host behind them, then the time-based panels. Figure~\ref{fig:dashboard} shows the complete view, and Table~\ref{tab:dashboard-reading} summarises what each step revealed.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.62\linewidth]{security-dashboard}
+  \caption{The [NSM Lab] Security Analysis dashboard on the exercise capture, 19:44 to 20:39 UTC.}
+  \label{fig:dashboard}
+\end{figure}
+
+\begin{table}[htbp]
+  \centering
+  \caption{Dashboard reading in triage order.}
+  \label{tab:dashboard-reading}
+  \scriptsize
+  \setlength{\tabcolsep}{3pt}
+  \begin{tabularx}{\linewidth}{@{}YYY@{}}
+    \toprule
+    \textbf{Triage question} & \textbf{Panel} & \textbf{Observation} \\
+    \midrule
+    Is there a known threat?
+      & IDS alerts; Alerts by signature
+      & 18 alerts from 14 signatures; the PowerShell, Spamhaus DROP and TeamViewer signatures all involve 10.1.17.215. \\
+    Which host is affected?
+      & Top source addresses
+      & 10.1.17.215 produces 854 flows to 140 destinations; every other internal source is negligible. \\
+    Is the activity still running?
+      & HTTP requests per minute
+      & A flat line of about 10 to 11 requests per minute to 5.252.153.241 from 19:46 to 20:37: automated polling, not browsing. \\
+    What was delivered?
+      & Data received per minute; Suspicious HTTP
+      & Bursts at 19:45 (installer) and 19:47 (TeamViewer files); .ps1 scripts and executables fetched from a bare IP with no user agent. \\
+    Where is the C2?
+      & TLS with self-signed certificates
+      & 45.125.66.32:2917 (9 sessions, SNI is the IP itself) and 45.125.66.252:443 (3 sessions, no SNI), both active from 20:00 to 20:28. \\
+    What can be closed?
+      & Alerts by signature
+      & Microsoft connection tests, a packed Windows Update file and periodic Microsoft and TeamViewer services. \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+Clicking 10.1.17.215 in any panel filtered every other panel to that host, so the compromised host, its delivery chain and both C2 servers were identified from one screen before any packet was opened. The packets were then needed only to confirm details such as the URI status messages and file hashes.
+
+\subsection{From Indicators to Detection Rules}
+
+Each indicator extracted from the capture was turned into a rule at the layer that can actually see it. Atomic indicators (addresses, domains, hashes) become exact-match rules that are precise but short-lived; behavioural indicators become rules on patterns that the attacker cannot change as cheaply (Table~\ref{tab:rules}).
+
+\begin{table}[htbp]
+  \centering
+  \caption{Indicators translated into rules, ordered from atomic to behavioural.}
+  \label{tab:rules}
+  \scriptsize
+  \setlength{\tabcolsep}{3pt}
+  \begin{tabularx}{\linewidth}{@{}YYYY@{}}
+    \toprule
+    \textbf{Indicator} & \textbf{Visible in} & \textbf{Rule} & \textbf{Expected lifetime} \\
+    \midrule
+    google-authenticator[.]burleson-appliance[.]net, authenticatoor[.]org
+      & DNS query, TLS SNI
+      & Suricata match on dns.query and tls.sni
+      & Days \\
+    5[.]252[.]153[.]241
+      & Every packet
+      & IP-list rule; egress block
+      & Hours to days \\
+    45[.]125[.]66[.]32, 45[.]125[.]66[.]252
+      & Every packet
+      & IP-list rule (already covered by Spamhaus DROP)
+      & Days \\
+    \path{/1517096937}, \path{/api/file/get-file/}
+      & HTTP request
+      & Suricata content match on http.uri
+      & Weeks \\
+    SHA-256 of delivered files
+      & Zeek files.log
+      & Kibana indicator-match rule on the file hash
+      & One build \\
+    HTTP to a bare IP with no user agent
+      & HTTP request
+      & Suricata http.host pattern, thresholded per host pair
+      & Durable \\
+    Self-signed TLS on a non-standard port
+      & Zeek ssl.log, conn.log
+      & Kibana query rule on certificate status and port
+      & Durable \\
+    Regular polling of one host
+      & Zeek http.log
+      & Request-rhythm analytic: at least 20 requests to one host with a coefficient of variation below 1.0
+      & Durable \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+Typical rules for the atomic and behavioural cases are shown below (simplified; local rules use SIDs from 9000001):
+
+\begin{lstlisting}
+# Atomic: stager polling URI
+alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"LAB IoC stager polling URI";
+ flow:established,to_server; http.uri; content:"/1517096937"; startswith;
+ threshold:type limit, track by_both, count 1, seconds 3600; sid:9000010; rev:1;)
+
+# Atomic: look-alike download domain
+alert dns $HOME_NET any -> any any (msg:"LAB IoC look-alike authenticator domain";
+ dns.query; content:"authenticatoor.org"; nocase; endswith; sid:9000011; rev:1;)
+
+# Behavioural: HTTP request to a bare IP address, one alert per host pair per hour
+alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"LAB HTTP request to raw IP host";
+ flow:established,to_server; http.host; pcre:"/^\d{1,3}(\.\d{1,3}){3}(:\d+)?$/";
+ threshold:type limit, track by_both, count 1, seconds 3600; sid:9000001; rev:2;)
+
+# Behavioural (Kibana KQL): self-signed TLS from the LAN on a non-standard port
+event.dataset:"zeek.ssl" and zeek.ssl.validation.status:"self signed certificate"
+ and not destination.port:(443 or 8443)
+\end{lstlisting}
+
+The threshold matters as much as the match. The first version of the raw-IP rule had no threshold and alerted on every one of the 594 polling requests; limiting it to one alert per host pair per hour kept the detection and removed 593 redundant alerts.
+
+\subsection{Rule Set Evaluation}
+
+Every alert on the final dashboard was labelled true positive, false positive or ambiguous against the exercise answers, and coverage was measured per attack stage rather than per packet. One caveat applies: rules built from this capture's own indicators are bound to fire on it, so their score here measures correctness, not generalisation. Only the behavioural rules and the ET Open signatures were written without knowledge of this attack.
+
+\subsubsection{Alert Volume}
+
+\begin{table}[htbp]
+  \centering
+  \caption{Alert volume before and after tuning.}
+  \label{tab:alert-volume}
+  \footnotesize
+  \begin{tabularx}{\linewidth}{@{}YcY@{}}
+    \toprule
+    \textbf{Stage of tuning} & \textbf{Alerts} & \textbf{Change} \\
+    \midrule
+    ET Open and untuned local rules & 619 & 594 from the raw-IP rule alone \\
+    Raw-IP rule thresholded per host pair per hour & 26 & $-593$ \\
+    QUIC decryption failures excluded as decoder noise & 18 & $-8$ \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\subsubsection{Alert Verdicts}
+
+\begin{table}[htbp]
+  \centering
+  \caption{Verdicts for the 18 dashboard alerts: 12 true positives, 5 false positives, 1 ambiguous.}
+  \label{tab:verdicts}
+  \scriptsize
+  \setlength{\tabcolsep}{3pt}
+  \begin{tabularx}{\linewidth}{@{}YcY@{}}
+    \toprule
+    \textbf{Signature group} & \textbf{Alerts} & \textbf{Verdict} \\
+    \midrule
+    Script and executable delivery (ET ATTACK\_RESPONSE, ET INFO PS1, ET HUNTING, ET INFO Executable Retrieved, LAB PowerShell script)
+      & 8
+      & True positive: stager scripts and TeamViewer files from 5.252.153.241 \\
+    ET DROP Spamhaus DROP Listed Traffic
+      & 2
+      & True positive: both C2 servers \\
+    LAB HTTP request to raw IP host
+      & 1
+      & True positive: the polling channel \\
+    ET INFO TeamViewer Dyngate User-Agent
+      & 1
+      & True positive in context: legitimate tool installed by the stager \\
+    ET INFO PE EXE or DLL Windows file download
+      & 1
+      & Ambiguous: matches both the TeamViewer delivery and Windows Update pattern; needs the file hash to decide \\
+    ET INFO Microsoft Connection Test
+      & 2
+      & False positive: Windows network-status check \\
+    ET INFO Packed Executable Download
+      & 1
+      & False positive: Windows Update file \\
+    LAB Possible beaconing
+      & 2
+      & False positive: Windows Delivery Optimization and the TeamViewer relay \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+Precision is therefore 12 of 18 (0.67), or 12 of 17 (0.71) if the ambiguous alert is set aside. Every false positive came from a low-severity informational signature or from the connection-level beacon rule; none came from a rule built on an indicator of this attack.
+
+\subsubsection{Coverage by Attack Stage}
+
+\begin{table}[htbp]
+  \centering
+  \caption{Detection coverage per attack stage: 5 of 7 stages raised an alert.}
+  \label{tab:coverage-stages}
+  \scriptsize
+  \setlength{\tabcolsep}{3pt}
+  \begin{tabularx}{\linewidth}{@{}YcYY@{}}
+    \toprule
+    \textbf{Attack stage} & \textbf{Alerted?} & \textbf{Rule that fired} & \textbf{Outcome} \\
+    \midrule
+    Lure: look-alike domains & No & None (new domains, no reputation) & False negative \\
+    Stager download & Yes & PowerShell signatures & True positive \\
+    Tool delivery & Yes & Executable signatures & True positive \\
+    Persistence report & No & None (clear-text URI only) & False negative \\
+    Remote access & Yes & TeamViewer Dyngate & True positive (context) \\
+    HTTP polling & Yes & Raw-IP rule; request-rhythm analytic. Connection-level beacon rule missed it & True positive; false negative for the beacon rule \\
+    TLS C2 & Yes & Spamhaus DROP & True positive (reputation only) \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\subsubsection{False Negatives and False Positives}
+
+The false negatives share a cause: the first contact and the encrypted channel carry no content a signature can match.
+\begin{itemize}
+  \item \textbf{Lure domains} were registered for the campaign, so no reputation list or signature knew them. Only the indicator rule, written afterwards, would catch a repeat.
+  \item \textbf{Polling inside keep-alive connections} produced three flow records for 594 requests, so the connection-level beacon rule had nothing to score. The request-rhythm analytic on http.log found it.
+  \item \textbf{TLS C2} was detected only because Spamhaus had already listed both servers. Their certificates were issued hours before use, so a fresh server would pass unflagged; the self-signed-certificate rule is the durable replacement.
+  \item \textbf{Persistence} is visible only because the malware reported it in clear text. Without endpoint logs, a quieter implant would leave no network trace of this stage.
+\end{itemize}
+
+The false positives are cheaper to fix (Table~\ref{tab:false-positives}).
+
+\begin{table}[htbp]
+  \centering
+  \caption{False positives and the tuning applied to each.}
+  \label{tab:false-positives}
+  \scriptsize
+  \setlength{\tabcolsep}{3pt}
+  \begin{tabularx}{\linewidth}{@{}YYY@{}}
+    \toprule
+    \textbf{False positive} & \textbf{Why it is benign} & \textbf{Tuning} \\
+    \midrule
+    Microsoft Connection Test
+      & Windows checks internet access to a Microsoft host
+      & Keep at low severity and off the alert queue for managed hosts \\
+    Packed Executable Download
+      & Signed Windows Update file from a Microsoft CDN
+      & Allow-list Microsoft update domains; alert only on unsigned files \\
+    LAB Possible beaconing
+      & Periodic Microsoft and TeamViewer services
+      & Allow-list known service ranges and require a second signal, such as a bare-IP host or a rare destination \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+Overall, signatures and reputation lists covered the tooling stages well, behavioural rules were needed for the polling channel, and the remaining gaps sit where the attack was new or encrypted. Tuning cut the alert volume from 619 to 18 without losing a single true detection, which is the result that matters for an analyst's queue.

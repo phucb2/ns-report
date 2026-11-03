@@ -1,0 +1,42 @@
+\section{Laboratory Environment}
+\label{sec:laboratory}
+
+The practical work used two environments. A generated-traffic lab produced attacks under controlled conditions, so that every packet had a known cause and service impact could be measured. A real-traffic lab processed a public capture of a genuine malware infection, so that detection could be tested on traffic the group did not create (Table~\ref{tab:two-labs}). Full configuration details are given in the appendix.
+
+\begin{table}[htbp]
+  \centering
+  \caption{The two laboratory environments.}
+  \label{tab:two-labs}
+  \footnotesize
+  \setlength{\tabcolsep}{4pt}
+  \begin{tabularx}{\linewidth}{@{}lYY@{}}
+    \toprule
+    & \textbf{Generated-traffic lab} & \textbf{Real-traffic lab} \\
+    \midrule
+    \textbf{Purpose} & Measure how floods affect a web service & Detect and investigate a real compromise \\
+    \textbf{Data} & Traffic generated inside an isolated network & Public 53-minute capture of an infected workstation \\
+    \textbf{Activities} & HTTP flood and TCP SYN flood & Malware download, C2 polling, remote access, TLS C2 \\
+    \textbf{Ground truth} & Known from the experiment schedule & Published exercise answers \\
+    \textbf{Main analysis} & Packet analysis, resource and log measurements & Flow analysis, IDS alerts, security dashboard \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\subsection{Generated-Traffic Lab}
+
+Four containers ran on an isolated Podman bridge network (172.28.0.0/24): an nginx and Python web target, an attacker, a benign probe and a sniffer capturing on the target's interface (Figure~\ref{fig:lab-topology}). The target was limited to half a CPU core and 64 MiB of memory, and SYN cookies were disabled, so the results apply to that configuration.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{lab-topology}
+  \caption{Generated-traffic lab topology and capture point.}
+  \label{fig:lab-topology}
+\end{figure}
+
+\subsection{Real-Traffic Lab}
+
+The real data is the public 2025-01-22 malware-traffic-analysis exercise, a 53-minute capture of a Windows workstation infected through a fake Google Authenticator download. It was hashed before use, inspected with Wireshark, tshark and Python, and processed by a Docker stack in which Zeek and Suricata generate logs and alerts, Filebeat loads them into Elasticsearch, and Kibana presents the dashboard.
+
+\subsection{Safety Controls}
+
+No attack traffic or malware could reach a real system. The generated lab had no external route; the malware capture was only read from disk, never replayed, and files carved from it were hashed but never opened. Analysis services listened on localhost only, and indicators in this report are defanged.

@@ -1,0 +1,96 @@
+\section{Security Analytics and Detection}
+\label{sec:detection}
+
+\subsection{Detection Approaches}
+\label{sec:detection-approaches}
+
+Security analytics is the application of detection methods to collected network and log data so that observations become decisions: which host is behaving unusually, how confident the evidence is, and what the analyst should do next. Table~\ref{tab:detection-approaches} compares the eight detection approaches used in network security monitoring: what each one matches, what it is good at, and how it fails~[\ref{src:nist-idps}].
+
+The first three are deterministic: they apply prior knowledge --- a signature, a policy condition, a number --- and return the same verdict every time. The next three learn what normal looks like and flag deviation from it. Correlation and threat intelligence add context and confidence to what the others produce, although a threat-intelligence match can also stand alone as a cheap indicator hit~[\ref{src:attack}].
+
+\begin{table}[htbp]
+  \centering
+  \caption{Detection approaches compared. The first three depend on prior knowledge, the middle three on a learned baseline, and the last two on context.}
+  \label{tab:detection-approaches}
+  \footnotesize
+  \setlength{\tabcolsep}{3pt}
+  \begin{tabularx}{\linewidth}{@{}YYYY@{}}
+    \toprule
+    \textbf{Approach} & \textbf{What it matches} & \textbf{Strength} & \textbf{Limitation} \\
+    \midrule
+    Signature & known byte patterns, exploit strings & fast and precise on known threats & blind to new variants and to encrypted payload \\
+    Rule & policy conditions (IF-THEN) on fields & deterministic, auditable, aligned with policy & rules grow complex; broad rules flood, narrow ones miss \\
+    Threshold & event counts in a time window & simple; catches brute force and scans & low-and-slow stays under; legitimate spikes cross \\
+    Statistical & deviation from a historical mean & finds change without a signature & needs history; legitimate change looks anomalous \\
+    Behavioural & deviation from a per-entity profile & catches compromised accounts and lateral movement & needs training; roles and schedules change \\
+    Anomaly & anything outside a learned baseline & detects novel activity & unusual is not malicious; baseline drift \\
+    Correlation & relationships between events across sources & builds a multi-stage narrative; cuts alert noise & depends on consistent fields, clocks and coverage \\
+    Threat intelligence & known-bad IPs, domains, hashes, TTPs & fast context on known campaigns & indicators age quickly; infrastructure changes cheaply \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+No row is sufficient alone. In this project the stager was identified by its payload and hash, but neither says anything about the polling that followed, because the polling carries no malicious string; a volume threshold caught the HTTP flood but not one request every 5.3 seconds; and the request-level timing test that recovered the poll (cv 0.675) is blind to encrypted, non-HTTP channels (Sections 7.2.9 and~\ref{sec:c2}). At flow level the same timing idea flagged a benign TeamViewer relay (cv 0.321) and, once the threshold was loosened, Windows Delivery Optimization (cv 1.203), while missing the implant altogether. Detection quality comes from combining methods, not from tuning one of them.
+
+\subsection{Known Indicators vs.\ Unknown or Previously Unseen Behaviour}
+\label{sec:indicators-vs-behaviour}
+
+Known-indicator detection asks whether an artefact has been seen before. Indicators are concrete --- file hashes, domains, IP addresses, URI paths, byte sequences --- and matching is cheap, which is why it is the first layer in most SOCs. Its weakness is structural: an indicator describes yesterday's infrastructure. Both C2 certificates in this project were created between four and four and a half hours before first use (15:24:47 and 15:42:40 UTC against first connections at 19:59:46 and 20:00:13), and the stager was addressed by bare IP, so there was no domain to blocklist (Section~\ref{sec:c2}).
+
+Behaviour-based detection asks a different question: is this host doing something it does not normally do? It uses volume, duration, port behaviour, timing and peer comparison, and can therefore surface activity that has no indicator at all. The price is a higher false-positive rate, because legitimate change --- a new role, a backup window, a software rollout --- also deviates from the baseline~[\ref{src:sommer}], [\ref{src:chandola}]. Table~\ref{tab:indicator-vs-behaviour} sets the two perspectives against each other.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Known-indicator and behaviour-based detection compared. They fail in opposite directions, which is why this report uses both.}
+  \label{tab:indicator-vs-behaviour}
+  \footnotesize
+  \setlength{\tabcolsep}{3pt}
+  \begin{tabularx}{\linewidth}{@{}YYY@{}}
+    \toprule
+    \textbf{Aspect} & \textbf{Known-indicator detection} & \textbf{Behaviour-based detection} \\
+    \midrule
+    Evidence used & hashes, domains, IPs, byte patterns & deviation from a learned baseline \\
+    Novel activity & not detected & detected if the deviation is visible \\
+    Time to deploy & immediate once the indicator exists & requires a training period \\
+    Cost of evasion & low: change address or hash & higher: change the behaviour \\
+    Typical error & false negatives on new variants & false positives on legitimate change \\
+    Maintenance & feed updates & baseline and threshold tuning \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+Indicators answer ``has this been seen before''; behaviour answers ``is this host doing something new''. At 19:45:34 the host contacted a lookalike domain over TLS: a signature had no payload to match, and only a behavioural question had a realistic chance of finding it.
+
+\subsection{False Positives and False Negatives}
+\label{sec:false-positives}
+
+Detection is a classification problem with two error types (Table~\ref{tab:error-types}). A false positive is benign activity flagged as malicious; a false negative is malicious activity that produces no alert. They are not symmetric in cost: a false positive consumes analyst time, a false negative consumes the organisation's data.
+
+\begin{table}[htbp]
+  \centering
+  \caption{The two error types in context.}
+  \label{tab:error-types}
+  \begin{tabularx}{\linewidth}{@{}YYY@{}}
+    \toprule
+    \textbf{Detection outcome} & \textbf{Malicious activity} & \textbf{Benign activity} \\
+    \midrule
+    Alert raised & true positive & false positive \\
+    No alert & false negative & true negative \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+False positives come from broad rules, generic signatures, stale baselines, and legitimate activity that resembles an attack. A nightly database backup looks like exfiltration by volume; an authorised vulnerability scan looks like reconnaissance; a software update looks like a download from an unknown host. This project reproduces the pattern: a rule that alerts on every HTTP request to a bare IP address would fire 594 times for one behaviour, and the connection-level timing test flags a benign TeamViewer relay (cv 0.321) and, at a looser threshold, Windows Delivery Optimization (cv 1.203) (Sections 7.2.9, \ref{sec:c2} and~\ref{sec:results}).
+
+The operational cost is attention. In an illustrative platform that generates 50,000 alerts a day with 95 per cent false positives~[\ref{src:axelsson}], an analyst spends the shift discarding alerts, response times rise, and genuine alerts get closed without investigation. That is alert fatigue, and it is a security failure rather than a comfort issue.
+
+False negatives come from the opposite direction: rules too narrow, thresholds too high, no signature for the technique, or deliberate evasion through low-and-slow pacing, obfuscation and encryption. Their cost is dwell time. An attacker who is not detected keeps the access, moves laterally and exfiltrates at leisure. The Equifax case in Section~\ref{sec:related} is the extreme version: decryption had been broken for ten months, the traffic was still collected, and nobody acted on it.
+
+Balancing the two is a tuning problem with no perfect solution. Lowering a threshold reduces false negatives and raises false positives; raising it does the reverse. Four controls move the boundary without pretending to remove it. Context-aware thresholds are tighter on high-value assets and looser on general workstations. Iterative rule tuning removes rules that fire on known-good behaviour and splits rules that conflate several behaviours. Dynamic baselines are refreshed as the environment changes, so a new application does not become an incident. Multi-source correlation requires two independent signals before an alert is raised, which is what turns a weak indicator into a decision.
+
+Both error types remain. The aim is not zero false positives; it is a known, measured rate that the analyst team can carry.
+
+\subsection{From Alert to Decision}
+\label{sec:alert-to-decision}
+
+An analyst does not choose one row of Table~\ref{tab:detection-approaches}. The methods run in parallel, and their outputs meet at triage. A signature or indicator hit arrives first, but it is a hypothesis: the analyst checks whether the host is expected to talk to that destination, what else it did in the preceding minutes, and whether a second source agrees. Correlation supplies that second source, enrichment supplies the reputation and ownership of the endpoints, and the verdict --- benign, suspicious or incident --- is recorded together with the evidence that supported it. The order matters less than the rule that no single alert closes an investigation on its own. Section~\ref{sec:investigation} follows one alert through exactly this path.

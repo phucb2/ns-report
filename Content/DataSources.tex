@@ -1,0 +1,138 @@
+\section{Network Data Sources}
+\label{sec:data-sources}
+
+Network Security Monitoring is only as good as the data it collects. This chapter examines three sources: packet captures, DNS traffic and HTTP/HTTPS traffic. For each, it describes what the data looks like, which security events it reveals, its strengths and limits, and the privacy issues it raises.
+
+\subsection{Packet Captures (PCAP)}
+\label{sec:pcap}
+
+A packet capture records every packet that crosses a monitored interface, including headers and, where present, the payload. It is the most complete form of network evidence, but its value depends on where it is captured, whether packets are dropped, how long it is kept and whether the content is encrypted.
+
+\subsubsection{Data Structure}
+
+A capture file is a short file header followed by one record per packet. Each record holds a timestamp, the captured and original length, and the raw bytes. The modern pcapng format, Wireshark's default, groups these records into blocks that also describe the capture interface and can store name resolutions and TLS keys. Figure~\ref{fig:wireshark}(a) shows the packet records as an analyst sees them: one row per packet with its timestamp, addresses, protocol and length. Below the list, tools decode each packet into its layers (Ethernet, IP, TCP or UDP, then the application protocol) and show the raw bytes. The full block layout is defined in the IETF pcapng specification~[\ref{src:pcapng}], and the decoded fields are listed in the Wireshark display filter reference~[\ref{src:wireshark-df}].
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{wireshark-capture}
+  \caption{One capture viewed in Wireshark: (a) packet records, one row per packet with timestamp, source, destination, protocol and length; (b) the same capture decoded as DNS, showing the query, the answer and the response flags.}
+  \label{fig:wireshark}
+\end{figure}
+
+\subsubsection{Identifiable Security Events}
+
+\begin{itemize}
+  \item \textbf{Evasive scans:} probes with unusual TCP flag combinations, such as NULL or XMAS scans, are visible in individual packet headers.
+  \item \textbf{Malware delivery and data theft:} transferred files can be reassembled and hashed, and credentials sent in clear text can be read.
+  \item \textbf{Evasion by fragmentation:} split or overlapping packets can be reassembled to expose content hidden from simpler tools.
+  \item \textbf{Incident reconstruction:} the exact sequence of requests and responses can be replayed for forensic analysis.
+\end{itemize}
+
+\subsubsection{Advantages and Limitations}
+
+\begin{table}[htbp]
+  \centering
+  \caption{Advantages and limitations of packet captures.}
+  \label{tab:pcap-pros}
+  \begin{tabularx}{\linewidth}{@{}YY@{}}
+    \toprule
+    \textbf{Advantages} & \textbf{Limitations} \\
+    \midrule
+    The most detailed evidence available; content and files can be reconstructed
+      & Large storage cost, so retention is usually days rather than months \\
+    Ground truth for checking what flows, logs and alerts report
+      & High-speed links can drop packets during capture \\
+    Independent of any vendor log format
+      & Encrypted payloads cannot be read without the keys \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\subsubsection{Privacy and Compliance Concerns}
+
+Full payloads may contain personal data, credentials and private communications, and a pcapng file that stores TLS keys can expose decrypted traffic to anyone who obtains it. Captures should therefore be kept only as long as needed, truncated or filtered where payload is not required, and protected by strict access control, in line with regulations such as GDPR.
+
+\subsection{DNS Traffic}
+\label{sec:dns}
+
+Almost every connection begins with a DNS lookup, so DNS traffic gives a compact record of which names each host tried to reach. It requires a fraction of the storage of full packet capture while still showing behaviour over time.
+
+\subsubsection{Data Structure}
+
+Each DNS transaction is a query (the name and the record type, such as A or TXT) and a response (a status code, the returned addresses and their time-to-live). A sensor such as Zeek writes one record per transaction with the timestamp, a connection identifier, the client and resolver addresses, the query, the response code and the answers. Figure~\ref{fig:wireshark}(b) shows these fields decoded from the same capture used to illustrate packet records. The complete field list is in the Zeek dns.log documentation~[\ref{src:zeek-dns}], and the message format is defined in RFC 1035~[\ref{src:rfc1035}].
+
+\subsubsection{Identifiable Security Events}
+
+\begin{itemize}
+  \item \textbf{DNS tunnelling and exfiltration:} long, random-looking subdomains or unusual record types such as TXT carry encoded data.
+  \item \textbf{Fast-flux infrastructure:} one name resolving to many changing addresses with very low TTLs.
+  \item \textbf{Beaconing:} the same name queried at regular intervals by an automated client.
+  \item \textbf{Look-alike and algorithm-generated domains:} names imitating trusted brands, or bursts of failed (NXDOMAIN) lookups.
+\end{itemize}
+
+\subsubsection{Advantages and Limitations}
+
+\begin{table}[htbp]
+  \centering
+  \caption{Advantages and limitations of DNS traffic.}
+  \label{tab:dns-pros}
+  \begin{tabularx}{\linewidth}{@{}YY@{}}
+    \toprule
+    \textbf{Advantages} & \textbf{Limitations} \\
+    \midrule
+    Compact and structured; easy to search and baseline
+      & DNS over HTTPS or TLS hides queries from network sensors \\
+    Links each connection to a domain name
+      & Connections made directly to an IP address bypass DNS entirely \\
+    Reveals malicious infrastructure before any payload arrives
+      & Caching means not every connection produces a lookup \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\subsubsection{Privacy and Compliance Concerns}
+
+Plain-text queries reveal users' browsing and application use to anyone on the path. Encrypted DNS protects that privacy but removes the organisation's visibility; some browsers, such as Firefox, disable it by default when the local resolver blocks a designated canary domain, which restores monitoring at the cost of user privacy. In addition, the EDNS Client Subnet extension~[\ref{src:rfc7871}] forwards part of the client's address to external name servers, leaking approximate location.
+
+\subsection{HTTP and HTTPS Traffic}
+\label{sec:http}
+
+Web traffic shows what users and malware actually do at the application layer: which resources they request, what they download and how they identify themselves.
+
+\subsubsection{Data Structure}
+
+An HTTP transaction is a request (method, URI and headers such as Host, User-Agent and Referer, optionally with a body) and a response (status code, headers and body). With HTTPS the content is encrypted, so a sensor sees only connection metadata and the TLS handshake: the requested server name (SNI), the TLS version and cipher suites and, in TLS 1.2, the server certificate. Zeek records these in its http, ssl and x509 logs~[\ref{src:zeek-http}]; the protocols are defined in RFC 9110 for HTTP~[\ref{src:rfc9110}] and RFC 8446 for TLS 1.3~[\ref{src:rfc8446}].
+
+\subsubsection{Identifiable Security Events}
+
+\begin{itemize}
+  \item \textbf{Web application attacks:} SQL injection, cross-site scripting and path traversal in URIs, headers or bodies.
+  \item \textbf{Command and control:} requests to a bare IP address, missing or unusual user agents, and regular polling.
+  \item \textbf{Malicious downloads and exfiltration:} scripts or executables fetched from unknown hosts, or large uploads to unapproved services.
+  \item \textbf{Credential attacks:} repeated 401 or 403 responses, or passwords sent over plain HTTP.
+  \item \textbf{Suspicious TLS:} self-signed certificates, a missing SNI or TLS on a non-standard port.
+\end{itemize}
+
+\subsubsection{Advantages and Limitations}
+
+\begin{table}[htbp]
+  \centering
+  \caption{Advantages and limitations of HTTP and HTTPS traffic.}
+  \label{tab:http-pros}
+  \begin{tabularx}{\linewidth}{@{}YY@{}}
+    \toprule
+    \textbf{Advantages} & \textbf{Limitations} \\
+    \midrule
+    Rich application context about user and attacker actions
+      & Most traffic is encrypted; content needs TLS inspection, which is costly and complex \\
+    TLS metadata (SNI, certificates, fingerprints) is still visible without decryption
+      & TLS 1.3 encrypts the certificate, and Encrypted Client Hello can hide the SNI \\
+    Reveals scanning and exploitation early in an attack
+      & Full content logging needs far more storage than flows or DNS \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\subsubsection{Privacy and Compliance Concerns}
+
+Plain HTTP exposes everything it carries, including personal data and session tokens in URLs and bodies. HTTPS protects the content, but TLS inspection breaks that protection inside the organisation, so decrypted data must be handled under the same rules as any other personal data. Organisations usually exempt sensitive categories such as banking and healthcare from inspection and restrict who can view decrypted traffic.

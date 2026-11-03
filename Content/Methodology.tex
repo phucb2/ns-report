@@ -1,0 +1,241 @@
+\section{Experimental Methodology}
+\label{sec:methodology}
+
+\subsection{Packet Analysis}
+\label{sec:packet-analysis}
+
+\subsubsection{Objectives and Experimental Phases}
+
+The investigation compared two mechanisms of service disruption: delayed HTTP processing and failed TCP connection establishment. Packet evidence was correlated with probe outcomes, resource measurements, and nginx logs.
+
+Each run followed four consecutive phases:
+
+\begin{table}[htbp]
+  \centering
+  \caption{Phases of each packet-analysis run.}
+  \label{tab:packet-phases}
+  \begin{tabularx}{\linewidth}{@{}l l Y@{}}
+    \toprule
+    \textbf{Phase} & \textbf{Recorded duration} & \textbf{Activity} \\
+    \midrule
+    Baseline & 20 s & Benign probe and local healthcheck \\
+    HTTP flood & 21.5 s & Probe continues while HTTP flood is generated \\
+    SYN flood & 32.0 s & Probe continues while SYN flood is generated \\
+    Recovery & 20 s & Generation stops; monitoring continues \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\subsubsection{Traffic Generation and Benign Probing}
+
+The HTTP generator used hey with 20 concurrent workers, disabled connection reuse, and a configured aggregate target of 1,000 requests/s for 20 seconds. Each request therefore attempted a new TCP connection.
+
+The SYN generator used ZMap against TCP port 80, with a configured rate of 5,000 SYN/s per invocation and source ports drawn from 1024--65535. The orchestration performed 20 invocations with one-second spacing. An attacker-side rule suppressed automatic TCP resets during generation to preserve pending connections. Rule-removal timing was recorded because subsequent resets could affect recovery.
+
+The independent probe requested \path{/index.html} using exponentially distributed gaps with a mean of one second and a three-second timeout. A probe was successful only when curl completed without error and returned HTTP 200. Connection reuse was checked through TCP stream and handshake inspection.
+
+\subsubsection{Packet Collection and Analysis}
+
+The sniffer started before baseline and captured traffic using tcpdump.
+
+Capture continued through recovery. The PCAP, capture statistics, phase timestamps, probe results, and server logs were retained for analysis.
+
+Analysis separated traffic by source address, phase, TCP flags, and HTTP fields. Representative connections were inspected to identify handshake completion, request and response timing, SYN/ACK retransmissions, resets, and connection closure.
+
+\subsection{Network Flow Analysis}
+\label{sec:flow-analysis}
+
+\subsubsection{Data and Method}
+
+This investigation implements Option B, network flow analysis, on the exercise capture \path{2025-01-22-traffic-analysis-exercise.pcap} (SHA-256 in Table~\ref{tab:flow-dataset}; 26,759,675 bytes; 39,427 packets; 19:44:56--20:38:18 UTC). The file was hashed before analysis, no traffic was replayed, and no payload was executed.
+
+Each packet was reduced to one row per 5-tuple: source and destination address, source and destination port, protocol, start time, duration, bytes and packets per direction, and an inferred connection state. The initiator is the sender of the first packet in the conversation --- the SYN for TCP, the query for UDP --- so \texttt{orig\_bytes} always means bytes sent by the side that opened the connection. Byte counts are frame lengths and include link and transport headers; they are not payload counts. State is derived from TCP flags, where S0 is an unanswered SYN and SF a completed handshake. The table was built with tshark 4.6.9 and Python 3.11, so every field is explicit rather than trusted to an exporter.
+
+Validation used an independent code path. The flow table reports 421 TCP and 346 UDP conversations, identical to the counts in Wireshark's Statistics $\rightarrow$ Conversations view for the same file (Figure~\ref{fig:conversations}); adding 20 ICMP flows gives 787. Zeek reports 859 connections on this capture. The 72-flow gap is a difference in timeout and UDP/ICMP handling that we could not resolve without running Zeek, and it is reported rather than explained away.
+
+Two units are measured. The connection level is what a NetFlow/IPFIX exporter or conn.log would supply. The request level counts HTTP transactions, because one TCP connection can carry hundreds of them; in this capture, 594 requests travel inside three connections. The unit of measurement, not the threshold, decides whether the command-and-control channel is visible at all.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Data set and tooling. The hash was recorded before analysis, so results are comparable with the other workstreams.}
+  \label{tab:flow-dataset}
+  \begin{tabularx}{\linewidth}{@{}lY@{}}
+    \toprule
+    \textbf{Item} & \textbf{Value} \\
+    \midrule
+    Capture & \path{2025-01-22-traffic-analysis-exercise.pcap} \\
+    SHA-256 & \texttt{\footnotesize e59db1c07c6fdefafa0abdbca03248c341cdc36c09c34753204d3162802a3586} \\
+    Size / packets & 26,759,675 bytes / 39,427 packets \\
+    Window (UTC) & 19:44:56--20:38:18 (53 min 22 s) \\
+    Tools & tshark 4.6.9 (Wireshark), Python 3.11, pandas 2.3 \\
+    Authorisation & Public training capture; no live traffic, no malware executed \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{ipv4-conversations}
+  \caption{IPv4 conversations sorted by bytes, with the TCP 421 and UDP 346 tabs visible. The first two rows are the stager and command-and-control conversations.}
+  \label{fig:conversations}
+\end{figure}
+
+\subsubsection{Flow Characteristics and Suspicious Pairs}
+
+The capture holds 39,087 IPv4 packets; the remaining 340 frames are ARP and other non-IPv4 traffic and were skipped. They reduce to 787 flows --- 421 TCP, 346 UDP, 20 ICMP --- and one workstation dominates them: 10.1.17.215 accounts for 777 flows to 138 external destinations. A capture-wide average would describe that workstation and nothing else, so every comparison that follows is made per host and per pair.
+
+Port usage separates the host's role from its external activity before any destination is examined (Table~\ref{tab:flow-ports}). DNS to the single resolver accounts for 287 flows; Kerberos, LDAP and DCE-RPC to 10.1.17.2 describe a domain-joined Windows workstation. External traffic uses only 80, 443 and 2917. The last two rows carry the intrusion: 19 flows on port 80 held the stager, the downloads and the polling, and nine flows on 2917 carried TLS on a port no browser uses. A monitor that alerts only on 443 sees none of it.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Destination ports by flow count. A monitor watching only port 443 would miss the stager channel entirely.}
+  \label{tab:flow-ports}
+  \begin{tabularx}{\linewidth}{@{}llrY@{}}
+    \toprule
+    \textbf{Port} & \textbf{Protocol} & \textbf{Flows} & \textbf{Reading} \\
+    \midrule
+    53 & UDP & 287 & DNS to the single resolver 10.1.17.2 \\
+    443 & TCP & 239 & TLS to 110 destinations: browsing plus C2 \\
+    389 & TCP & 80 & LDAP to the domain controller \\
+    135 / 49668 & TCP & 28 / 28 & DCE-RPC: normal Windows domain traffic \\
+    123 & UDP & 25 & NTP \\
+    88 & TCP & 24 & Kerberos \\
+    80 & TCP & 19 & HTTP: stager, downloads, polling \\
+    2917 & TCP & 9 & TLS on a non-standard port \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+Table~\ref{tab:flow-pairs} ranks the five pairs that shaped the investigation. On the 45.125.66.32 pair, 9.69 MB is received against 587 KB sent --- roughly 16:1 --- so the flow records a download, not exfiltration. The 45.125.66.252 session keeps a connection open for 38 minutes to move 107 KB in total, which is a channel held alive rather than a transfer. The three bursts to 45.125.66.32 begin at 19:59:46, 20:25:16 and 20:28:01, each 7 to 8 seconds after a ``PS process started'' report to the stager. Flow timing alone cannot prove causation, but the same offset three times is strong circumstantial evidence.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Selected pairs. Duration is summed connected time; span is first to last flow, which is why a 34-second total can span 28.7 minutes.}
+  \label{tab:flow-pairs}
+  \scriptsize
+  \setlength{\tabcolsep}{2pt}
+  \begin{tabularx}{\linewidth}{@{}YrrrrrY@{}}
+    \toprule
+    \textbf{Source $\rightarrow$ destination} & \textbf{Port} & \textbf{Flows} & \textbf{Bytes out} & \textbf{Bytes in} & \textbf{Duration (span)} & \textbf{Reading} \\
+    \midrule
+    10.1.17.215 $\rightarrow$ 5.252.153.241 & 80 & 3 & 235,394 & 6,601,697 & 3,052 s (52.4 min) & stager; tools delivered, then polled \\
+    10.1.17.215 $\rightarrow$ 45.125.66.32 & 2917 & 9 & 587,077 & 9,691,463 & 34 s (28.7 min) & three bursts, $\sim$3.2 MB received each \\
+    10.1.17.215 $\rightarrow$ 45.125.66.252 & 443 & 3 & 38,961 & 68,409 & 2,281 s (38.1 min) & long, near-silent session \\
+    10.1.17.215 $\rightarrow$ 185.188.32.26 & 80 & 10 & 10,304 & 5,890 & 6 s & TeamViewer registration \\
+    10.1.17.215 $\rightarrow$ 23.207.166.9 & 443 & 25 & 36,539 & 194,477 & 2,715 s & Windows Delivery Optimization (benign) \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+External connections per five-minute bucket fall into four phases: 95 at 19:45 (lure and stager), 100 at 19:55 (TeamViewer), 15 at 20:00 and 58 at 20:25 (command and control). The quiet intervals matter as much as the peaks: the implant is idle until the operator sends work, then acts within seconds.
+
+Flows give an address and a port, nothing more. Both C2 servers presented self-signed certificates carrying the IP address as the common name, issued at 15:24 and 15:42 UTC on the day of the attack --- about four and a half hours before first use. That evidence comes from the TLS layer rather than the flow record and is reconstructed in Section~\ref{sec:investigation-evidence}, Step 4. The largest delivered object was exported and hashed without execution (4,380,968 bytes; SHA-256 in Appendix B), and a second analyst hashing it independently obtained the same value.
+
+\subsubsection{Beacon Detection and Evaluation}
+\label{sec:beacon}
+
+The conventional flow test scores inter-arrival regularity per source/destination/port triple with the coefficient of variation, CV = standard deviation of the gaps divided by their mean. A value near zero is machine-like. We applied it with the usual minimum of four flows and a threshold of 0.3, and it produced no candidates.
+
+The reason is structural. Of the five destinations the exercise labels attacker-controlled, only one had enough flows to score: 45.125.66.32:2917, nine flows, CV 2.288 --- irregular by this measure. The stager pair produced three flows, and the variance of two gaps carries no information. The nearest benign candidate was the TeamViewer registration at CV 0.321: regular enough to rank, and not malicious.
+
+Counted as HTTP transactions, the same stager pair yields 594 events instead of three. The mean gap is 5.30 s over 3,142 s, with CV 0.675. Of the 594 requests, 584 returned 404 and 10 returned 200; 593 carry no User-Agent, and the single exception is the .NET WebClient default. A browser does not ask 584 times for a page that is not there. Polling until work exists is task-queue behaviour, and the rhythm is consistent with an implant rather than a user (Figure~\ref{fig:tcp-stream}).
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{tcp-stream-polling}
+  \caption{One TCP stream (stream 61) carrying hundreds of requests. This is the mechanism that hides polling from flow-level analysis: three flow records, 594 transactions.}
+  \label{fig:tcp-stream}
+\end{figure}
+
+Because the exercise publishes its answers, the detector can be scored rather than described. Five destinations are labelled attacker-controlled; 185.188.32.26 is excluded as a relay, a legitimate TeamViewer service the attacker abused, because counting an ambiguous label would inflate the result. Coverage and recall are reported separately, since collapsing them flatters any detector (Table~\ref{tab:flow-recall}, Figure~\ref{fig:coverage}). At connection level all five pairs are visible in the data, but only one can be scored and none is flagged: detector recall 0.00. At request level only one pair is visible --- the HTTP channel --- and it is flagged: detector recall 1.00 of one. End-to-end recall, the figure a SOC actually experiences, is 0.00 at connection level and 0.20 at request level.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Coverage and recall, reported separately. Conflating the two is how a detector can claim high recall while missing the incident.}
+  \label{tab:flow-recall}
+  \footnotesize
+  \setlength{\tabcolsep}{3pt}
+  \begin{tabularx}{\linewidth}{@{}lYcc@{}}
+    \toprule
+    \textbf{Quantity} & \textbf{Meaning} & \textbf{Connection level} & \textbf{Request level} \\
+    \midrule
+    Telemetry coverage & malicious pairs visible at this level & 5/5 & 1/5 (HTTP only) \\
+    Scoreable coverage & of those, pairs with enough events & 1/5 & 1/1 \\
+    Detector recall & of visible pairs, flagged & 0.00 & 1.00 \\
+    End-to-end recall & of all five pairs, flagged & 0.00 & 0.20 \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{coverage-recall}
+  \caption{Telemetry coverage, scoreable coverage and end-to-end recall at both levels. Conditional columns use a different denominator, because a detector cannot be blamed for traffic its telemetry never sees; the gap between detector recall and end-to-end recall is the cost of missing telemetry.}
+  \label{fig:coverage}
+\end{figure}
+
+The failure is not a tuning problem. From CV 0.10 to 2.00, true positives stay at zero while false positives rise from 0 to 9: lowering the threshold adds noise, not detection. At request level precision is 1.00 at CV 0.75 and above; below that nothing is flagged, because the polling jitter of 0.675 sits close to the boundary. A tighter-jitter implant would slip through, and we state that as a limit rather than tune around it.
+
+Scored per rule, because an analyst acts on a host and not on a pair, the outcome is more useful than the detector score. The timing rule flagged two pairs and no malicious destination. A rule for ports outside the host's normal set flagged 34 pairs, including 2917, and did recover one. Ranking by inbound volume returned the three largest pairs, all malicious. The host was therefore found by port anomaly and volume, not by timing.
+
+The limits bound the result. Connection-level periodicity testing misses polling inside reused connections, a false-negative class that no threshold removes. 161 triples had fewer than four flows and could not be scored; with two events the standard deviation is undefined, and with three it is unstable. Our table reports 787 flows where Zeek reports 859; the TCP and UDP counts match Wireshark exactly, so the gap lies in timeout or UDP/ICMP handling and remains unresolved. Byte counts are frame lengths, so they exceed payload figures. And the request level sees HTTP only: a C2 carried over TLS with no HTTP layer would be invisible even here.
+
+Flow metadata found the host, the two C2 servers and the three payload pulls without decrypting anything. It did not find the beacon; request-level telemetry did, and that difference is the design constraint the architecture in Section~\ref{sec:architecture} has to meet.
+
+\subsection{Security Dashboard Analysis}
+\label{sec:dashboard-method}
+
+\subsubsection{Objective and Data}
+
+This investigation implements Option E, a security dashboard. It processes the same exercise capture used for the flow analysis (\path{2025-01-22-traffic-analysis-exercise.pcap}) through an SIEM pipeline. The goal is to see whether one dashboard view can point an analyst to the compromised host and the right time window, without first studying packets or flows by hand. The capture is only read from disk. No traffic is replayed onto a network, and files carved from the traffic are hashed but never opened.
+
+\subsubsection{Pipeline}
+
+The lab runs in Docker Compose on a single host. Zeek and Suricata read the capture offline; Filebeat normalises their output into Elasticsearch, where Kibana presents the dashboard. In parallel, a flow-statistics script scores beaconing and HTTP request rhythm from the Zeek logs. The analyst pivots from any alert back to the original packets by the Zeek connection uid.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{dashboard-pipeline}
+  \caption{Dashboard pipeline. Solid arrows are data flows; the dashed arrow is the analyst pivot. Elasticsearch and Kibana listen on localhost only.}
+  \label{fig:dashboard-pipeline}
+\end{figure}
+
+One script (\path{analyze.sh}) records the PCAP hash, runs Zeek and Suricata offline, and writes the flow summary. Filebeat then picks up the logs automatically. Before using the real capture, the pipeline was checked with a synthetic self-test capture that contains a known beacon and a harmless test request that any working IDS is expected to flag.
+
+\subsubsection{Dashboard Design}
+
+We built a custom Kibana dashboard, [NSM Lab] Security Analysis, with the panels below. Each panel answers one triage question rather than just counting traffic. Kibana's time zone is set to UTC so that times line up with the PCAP.
+
+\begin{longtable}{@{}>{\colragged\arraybackslash}p{0.28\linewidth}>{\colragged\arraybackslash}p{0.20\linewidth}>{\colragged\arraybackslash}p{0.46\linewidth}@{}}
+  \caption{Dashboard panels, chart types and how to interpret them.}
+  \label{tab:dashboard-panels} \\
+  \toprule
+  \textbf{Panel} & \textbf{Chart type} & \textbf{How to read it} \\
+  \midrule
+  \endfirsthead
+  \caption[]{Dashboard panels, chart types and how to interpret them (continued)} \\
+  \toprule
+  \textbf{Panel} & \textbf{Chart type} & \textbf{How to read it} \\
+  \midrule
+  \endhead
+  \bottomrule
+  \endlastfoot
+  Traffic summary & Metric & Total connections and bytes for the time window; a quick check that the data loaded completely. \\
+  Traffic volume over time & Line chart & Peaks mark bursts of activity; compare them with the alert timeline before investigating. \\
+  Top external connections & Data table & Source-destination pairs ranked by bytes, with port, protocol, flows and duration; large volumes or unusual ports stand out. \\
+  Top source / top destination addresses & Horizontal bar charts & Show which internal hosts and which external hosts carry most traffic; one dominant internal source narrows the investigation. \\
+  Protocol distribution & Pie chart & Shows the protocol mix; a small but unexpected slice (for example HTTP to a bare IP) matters more than the large ones. \\
+  IDS alerts by signature & Horizontal bar chart & The most frequent signatures; separates repeated noise from rare, high-value alerts. \\
+  Alerts over time & Stacked bar chart & When alerts fire, split by severity; clusters show the phases of an attack. \\
+  IDS alerts & Data table & Individual alerts with host, signature and time, used as the starting point for triage. \\
+  Suspicious HTTP & Data table & Requests to bare IP addresses and script or executable downloads; each row is a lead to check. \\
+  TLS with self-signed certificates & Data table & External servers presenting self-signed certificates, with first and last seen times; likely C2 candidates. \\
+  HTTP requests per minute & Line chart & A flat, steady line over a long period indicates automated polling; human browsing is irregular. \\
+  Data received per minute & Bar chart & Isolated tall bars show large downloads; bars that follow a polling request suggest payload delivery. \\
+\end{longtable}
+
+\subsubsection{Analysis and Rule Tuning}
+
+The analyst starts from the alert panels, filters the dashboard to the host that triggered them, and reads the time-based panels for patterns: steady polling, bursts, and long, quiet sessions.
+
+Detection rules were tuned in two passes. The first pass ran untuned local rules, so the number of alerts from each one could be measured. The second pass added a threshold of one alert per host pair per hour to any rule that fired repeatedly on a single behaviour. Every alert on the final dashboard was then labelled true positive, false positive or decoder noise, so the dashboard's precision is measured rather than assumed.

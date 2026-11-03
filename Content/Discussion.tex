@@ -1,0 +1,132 @@
+\section{Security Analysis and Discussion}
+\label{sec:discussion}
+
+This chapter brings the findings from both data sets together to answer three questions: how suspicious behaviour can be told apart from normal behaviour, how separate pieces of evidence can be correlated into a finding, and how well security analytics identified the suspicious behaviour. Three activities are used throughout: the HTTP flood and the SYN flood from the controlled lab, and the command-and-control (C2) polling from the public malware capture.
+
+\subsection{Distinguishing Normal from Suspicious Behaviour}
+
+No single value in this project was suspicious on its own. Suspicion came from deviation from a baseline that fits the host's role, and from combinations of features that legitimate software rarely produces together (Table~\ref{tab:normal-vs-suspicious}).
+
+\begin{table}[htbp]
+  \centering
+  \caption{Normal and suspicious behaviour for the three activities.}
+  \label{tab:normal-vs-suspicious}
+  \scriptsize
+  \setlength{\tabcolsep}{3pt}
+  \begin{tabularx}{\linewidth}{@{}YYYY@{}}
+    \toprule
+    \textbf{Activity} & \textbf{Normal reference} & \textbf{Observed} & \textbf{Benign look-alike} \\
+    \midrule
+    HTTP flood
+      & Probe requests about once a second; median time to first response byte 11.2 ms
+      & 1,722 requests in about 20 s from one source to one URI; median time to first byte 217.5 ms while handshakes stayed fast
+      & Authorised load test or a genuine surge in demand \\
+    SYN flood
+      & Handshakes complete in microseconds and probe connections succeed
+      & About 100,000 SYNs from 54,195 source ports, no final ACK, SYN/ACKs retransmitted at 1, 2, 4, 8 and 16 s; 7 of 10 probe connections failed
+      & Packet loss, a congested link or gaps in the capture \\
+    C2 polling
+      & A workstation browses irregularly, with a user agent and a Referer
+      & 594 requests to a bare IP about 5.3 s apart (CV 0.675), 584 answered 404, almost all without a user agent
+      & Update checkers, long-poll APIs and monitoring agents \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+Two lessons follow. First, the baseline has to be specific to the host's role. A workstation polling a bare IP address or opening TLS on port 2917 is unusual; the same rhythm from a monitoring server would not be. Second, the benign look-alikes are real rather than theoretical. The connection-level timing test flagged Windows Delivery Optimization and a TeamViewer relay, both legitimate, and an authorised load test would look exactly like the HTTP flood in the packets. What separated the attacks from these cases was a combination of features: regularity together with a bare-IP host, 404 answers and no browser identity for the polling; volume together with degraded service for legitimate users for the floods.
+
+The two floods also show that ``suspicious'' must be defined by impact as well as by traffic shape. In the HTTP flood the server kept accepting connections quickly but answered slowly, so the damage sat in the application. In the SYN flood the HTTP exchange was fast for the few clients that got through, but most never completed a handshake. The same label, denial of service, covers two different failures that need different detection and different mitigation.
+
+\subsection{Correlating Multiple Pieces of Evidence}
+
+Each data source saw only part of each activity. A finding was accepted only when at least two independent sources agreed, and the correlation usually added something that no single source could show (Table~\ref{tab:correlation}).
+
+\begin{table}[htbp]
+  \centering
+  \caption{Findings confirmed by correlating independent sources.}
+  \label{tab:correlation}
+  \scriptsize
+  \setlength{\tabcolsep}{3pt}
+  \begin{tabularx}{\linewidth}{@{}YYYY@{}}
+    \toprule
+    \textbf{Finding} & \textbf{Evidence A} & \textbf{Evidence B} & \textbf{What correlation adds} \\
+    \midrule
+    HTTP flood degraded the service
+      & PCAP: time to first byte rose about twentyfold while SYN/ACK stayed fast
+      & Probe response times, nginx log rate and victim CPU over the same phase
+      & Places the delay in the application rather than the network \\
+    SYN flood blocked new connections
+      & PCAP: SYNs without a final ACK and repeated SYN/ACKs
+      & Failed probe connections and TCP connection states on port 80
+      & Shows that connection establishment, not HTTP processing, failed \\
+    10.1.17.215 is compromised
+      & Suricata: PowerShell stager and Spamhaus DROP alerts
+      & Zeek http.log: 594 polls to a bare IP; DHCP and Kerberos: host DESKTOP-L8C5GSJ, user shutchenson
+      & Turns an IP address into a machine and an account to contain \\
+    The stager drives the TLS C2
+      & http.log: three ``PS process started'' reports
+      & conn.log and ssl.log: a self-signed TLS transfer from 45.125.66.32 within 7 to 8 s of each report
+      & A timing link between two channels that no single log contains \\
+    TeamViewer is malicious here
+      & files.log: TeamViewer executables served by the stager
+      & http.log: DynGate registration with genuine TeamViewer servers
+      & Context turns a legitimate tool into evidence \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+Correlation depends on join keys more than on tools. In this project the keys were a common UTC clock, the IP-to-host mapping from DHCP, the Zeek connection uid shared across conn, http, ssl and files logs, and the flow identity that links an alert back to its packets. Where a key was missing, correlation stopped. With no endpoint logs, the persistence shortcut and the PowerShell execution could only be inferred from the malware's own clear-text reports, so they remain medium-confidence findings.
+
+Correlation also removed false positives. Windows Delivery Optimization was regular enough to trip the timing rule, but it had no stager before it, used a Microsoft CDN host and carried a normal client identity. The TeamViewer relay was genuine infrastructure, and only the fact that the client had been delivered by the stager made it relevant. In both cases a second source changed the verdict.
+
+\subsection{How Security Analytics Identified Suspicious Behaviour}
+
+Each analytic method found a different part of the activity and missed another (Table~\ref{tab:methods}).
+
+\begin{table}[htbp]
+  \centering
+  \caption{What each analytic method found and missed.}
+  \label{tab:methods}
+  \scriptsize
+  \setlength{\tabcolsep}{3pt}
+  \begin{tabularx}{\linewidth}{@{}YYY@{}}
+    \toprule
+    \textbf{Method} & \textbf{What it found} & \textbf{What it missed} \\
+    \midrule
+    Signatures
+      & Stager scripts, executable delivery, TeamViewer registration
+      & Lure domains, persistence, anything inside TLS \\
+    Reputation lists
+      & Both TLS C2 servers (Spamhaus DROP)
+      & Infrastructure not yet listed; C2 certificates were only hours old \\
+    Volume and thresholds
+      & Both floods; the largest inbound pairs
+      & Low-and-slow polling at about 11 requests per minute \\
+    Connection-level timing
+      & No malicious pair; two benign services flagged
+      & Polling hidden inside three keep-alive connections \\
+    Request-level timing
+      & The polling channel (594 requests, CV 0.675)
+      & A C2 channel with no HTTP layer \\
+    Port anomaly
+      & TLS on port 2917
+      & The second C2 server, which used port 443 \\
+    Dashboard correlation
+      & The host, the delivery chain and both C2 servers on one screen
+      & Only what the sensors already produce \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+Three conclusions stand out. The unit of measurement mattered more than the threshold: no setting of the connection-level timing test found the polling, while counting requests found it immediately. Thresholds without tuning overwhelm the analyst: one untuned rule produced 594 alerts for one behaviour, and tuning reduced the queue from 619 to 18 alerts without losing a true detection. Finally, the methods fail in different places, so they are useful together and weak alone. The tuned rule set reached a precision of about 0.7 and raised an alert in 5 of the 7 attack stages; the stages it missed were the new lure domains and the self-reported persistence, which no network signature could have known in advance.
+
+\subsection{Limitations}
+
+\begin{itemize}
+  \item \textbf{Clean ground truth.} The malware capture contains one infected host and a published answer key, which makes labelling easier than in a real network.
+  \item \textbf{Configuration-specific lab results.} The flood results depend on a target limited to half a CPU core with SYN cookies disabled; a production server would degrade differently.
+  \item \textbf{Optimistic indicator rules.} Rules built from this capture's own indicators are bound to match it; only the behavioural rules and public signatures were tested on unseen behaviour.
+  \item \textbf{Missing sources.} No endpoint, proxy or firewall logs were available, and TLS was not decrypted, so execution and payload content remain inferred.
+\end{itemize}
+
+Within these limits, the project answers its central question. Network traffic and security data can identify suspicious activity reliably when behaviour is compared with a role-specific baseline, when every finding is confirmed by a second independent source, and when signature, reputation and behavioural analytics are layered so that each covers the others' blind spots.
